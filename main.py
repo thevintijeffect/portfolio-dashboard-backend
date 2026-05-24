@@ -102,3 +102,9 @@ def portfolio():
         "total_holdings": len(all_holdings),
         "holdings": all_holdings.fillna("").to_dict(orient="records")
     }
+
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": str(e)
+        }
