@@ -82,28 +82,31 @@ def normalize_cash(df):
 @app.get("/portfolio")
 def portfolio():
 
-    cash = get_sheet_data("Cash")
-    mf = get_sheet_data("MFs")
-    shares = get_sheet_data("Shares")
-    gold = get_sheet_data("Gold")
+    try:
 
-    cash = normalize_cash(cash)
-    mf = normalize_mf(mf)
-    shares = classify_shares(shares)
-    gold = normalize_gold(gold)
+        cash = get_sheet_data("Cash")
+        mf = get_sheet_data("MFs")
+        shares = get_sheet_data("Shares")
+        gold = get_sheet_data("Gold")
 
-    all_holdings = pd.concat(
-        [cash, mf, shares, gold],
-        ignore_index=True
-    )
+        cash = normalize_cash(cash)
+        mf = normalize_mf(mf)
+        shares = classify_shares(shares)
+        gold = normalize_gold(gold)
 
-    return {
-        "status": "success",
-        "total_holdings": len(all_holdings),
-        "holdings": all_holdings.fillna("").to_dict(orient="records")
-    }
+        all_holdings = pd.concat(
+            [cash, mf, shares, gold],
+            ignore_index=True
+        )
+
+        return {
+            "status": "success",
+            "total_holdings": len(all_holdings),
+            "holdings": all_holdings.fillna("").to_dict(orient="records")
+        }
 
     except Exception as e:
+
         return {
             "status": "error",
             "message": str(e)
