@@ -7,15 +7,17 @@ import json
 
 app = FastAPI()
 
-# -----------------------------
-# GOOGLE SHEETS CONFIG
-# -----------------------------
+# ---------------------------------
+# GOOGLE AUTH
+# ---------------------------------
+
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets.readonly"
 ]
 
-# Load credentials from environment variable
-creds_dict = json.loads(os.environ["GOOGLE_CREDS"])
+creds_dict = json.loads(
+    os.environ["GOOGLE_CREDS"]
+)
 
 credentials = Credentials.from_service_account_info(
     creds_dict,
@@ -24,90 +26,323 @@ credentials = Credentials.from_service_account_info(
 
 client = gspread.authorize(credentials)
 
-SHEET_ID = "1A9vTee-Jfg8lgLx18-942VuBHkQnrzqI3n2uQOCwOyA"
+SHEET_ID="1A9vTee-Jfg8lgLx18-942VuBHkQnrzqI3n2uQOCwOyA"
 
-sheet = client.open_by_key(SHEET_ID)
+sheet=client.open_by_key(
+    SHEET_ID
+)
 
-# -----------------------------
+# ---------------------------------
+# FX RATES
+# manually maintained initially
+# ---------------------------------
+
+FX_TO_SGD = {
+
+    "SGD":1,
+
+    "USD":1.35,
+
+    "INR":0.016,
+
+    "AUD":0.88,
+
+    "GBP":1.82,
+
+    "EUR":1.55
+}
+
+# ---------------------------------
 # ROOT
-# -----------------------------
+# ---------------------------------
+
 @app.get("/")
-def home():
+def root():
+
     return {
-        "status": "running",
-        "message": "Portfolio backend active"
+
+        "status":"running",
+
+        "message":"portfolio backend active"
     }
 
-# -----------------------------
-# HELPERS
-# -----------------------------
-def get_sheet_data(tab_name):
-    ws = sheet.worksheet(tab_name)
-    data = ws.get_all_records()
+# ---------------------------------
+# READ SHEETS
+# ---------------------------------
+
+def get_sheet(tab):
+
+    ws=sheet.worksheet(tab)
+
+    data=ws.get_all_records()
+
     return pd.DataFrame(data)
 
-# -----------------------------
-# CLASSIFICATION
-# -----------------------------
-def classify_shares(df):
-
-    def classify(asset_name):
-        if isinstance(asset_name, str) and "ETF" in asset_name.upper():
-            return "ETF"
-        return "Stock"
-
-    df["sub_type"] = df.iloc[:, 0].apply(classify)
-    df["asset_class"] = "Equity"
-
-    return df
-
-def normalize_mf(df):
-    df["sub_type"] = "Mutual Fund"
-    df["asset_class"] = "Mutual Fund"
-    return df
-
-def normalize_gold(df):
-    df["sub_type"] = "Gold"
-    df["asset_class"] = "Gold"
-    return df
+# ---------------------------------
+# NORMALIZATION
+# ---------------------------------
 
 def normalize_cash(df):
-    df["sub_type"] = "Cash"
-    df["asset_class"] = "Cash"
-    return df
 
-# -----------------------------
-# PORTFOLIO API
-# -----------------------------
+    rows=[]
+
+    for _,r in df.iterrows():
+
+        rows.append({
+
+            "asset":
+
+            r.iloc[0],
+
+            "asset_class":
+
+            "Cash",
+
+            "sub_type":
+
+            "Cash",
+
+            "quantity":
+
+            1,
+
+            "current_value":
+
+            float(r.iloc[1]),
+
+            "cost_basis":
+
+            float(r.iloc[1]),
+
+            "currency":
+
+            "SGD"
+        })
+
+    return pd.DataFrame(rows)
+
+def normalize_mf(df):
+
+    rows=[]
+
+    for _,r in df.iterrows():
+
+        rows.append({
+
+            "asset":r.iloc[0],
+
+            "asset_class":"Mutual Fund",
+
+            "sub_type":"Mutual Fund",
+
+            "quantity":r.iloc[2],
+
+            "current_value":r.iloc[4],
+
+            "cost_basis":r.iloc[5],
+
+            "currency":r.iloc[9]
+        })
+
+    return pd.DataFrame(rows)
+
+def normalize_gold(df):
+
+    rows=[]
+
+    for _,r in df.iterrows():
+
+        rows.append({
+
+            "asset":r.iloc[0],
+
+            "asset_class":"Gold",
+
+            "sub_type":"Gold",
+
+            "quantity":r.iloc[2],
+
+            "current_value":r.iloc[4],
+
+            "cost_basis":r.iloc[6],
+
+            "currency":r.iloc[9]
+        })
+
+    return pd.DataFrame(rows)
+
+def normalize_shares(df):
+
+    rows=[]
+
+    for _,r in df.iterrows():
+
+        asset=r.iloc[0]
+
+        subtype="ETF" if "ETF" in str(asset).upper() else "Stock"
+
+        rows.append({
+
+            "asset":asset,
+
+            "asset_class":"Equity",
+
+            "sub_type":subtype,
+
+            "quantity":r.iloc[2],
+
+            "current_value":r.iloc[4],
+
+            "cost_basis":r.iloc[6],
+
+            "currency":r.iloc[11]
+        })
+
+    return pd.DataFrame(rows)
+
+# ---------------------------------
+# ANALYTICS ENGINE
+# ---------------------------------
+
 @app.get("/portfolio")
+
 def portfolio():
 
     try:
 
-        cash = get_sheet_data("Cash")
-        mf = get_sheet_data("MFs")
-        shares = get_sheet_data("Shares")
-        gold = get_sheet_data("Gold")
+        cash=normalize_cash(
+            get_sheet("Cash")
+        )
 
-        cash = normalize_cash(cash)
-        mf = normalize_mf(mf)
-        shares = classify_shares(shares)
-        gold = normalize_gold(gold)
+        mf=normalize_mf(
+            get_sheet("MFs")
+        )
 
-        all_holdings = pd.concat(
-            [cash, mf, shares, gold],
+        shares=normalize_shares(
+            get_sheet("Shares")
+        )
+
+        gold=normalize_gold(
+            get_sheet("Gold")
+        )
+
+        holdings=pd.concat(
+
+            [cash,mf,shares,gold],
+
             ignore_index=True
         )
 
+        holdings["fx"]=holdings[
+            "currency"
+        ].map(FX_TO_SGD)
+
+        holdings["value_sgd"]=(
+            holdings["current_value"]
+            *
+            holdings["fx"]
+        )
+
+        holdings["cost_sgd"]=(
+            holdings["cost_basis"]
+            *
+            holdings["fx"]
+        )
+
+        holdings["profit_sgd"]=(
+            holdings["value_sgd"]
+            -
+            holdings["cost_sgd"]
+        )
+
+        total=holdings[
+            "value_sgd"
+        ].sum()
+
+        allocation=(
+            holdings
+            .groupby(
+                "sub_type"
+            )["value_sgd"]
+            .sum()
+            / total
+            *100
+        )
+
+        currency=(
+            holdings
+            .groupby(
+                "currency"
+            )["value_sgd"]
+            .sum()
+            / total
+            *100
+        )
+
+        top=(
+            holdings
+            .sort_values(
+                "value_sgd",
+                ascending=False
+            )
+            .head(10)
+        )
+
         return {
-            "status": "success",
-            "total_holdings": len(all_holdings),
-            "holdings": all_holdings.fillna("").to_dict(orient="records")
+
+            "summary":{
+
+                "networth_sgd":
+
+                round(total,2),
+
+                "profit_sgd":
+
+                round(
+                    holdings[
+                        "profit_sgd"
+                    ].sum(),
+                    2
+                )
+            },
+
+            "allocation":
+
+            allocation.round(
+                2
+            ).to_dict(),
+
+            "currency_exposure":
+
+            currency.round(
+                2
+            ).to_dict(),
+
+            "top_holdings":
+
+            top[
+                [
+                    "asset",
+                    "value_sgd"
+                ]
+            ].to_dict(
+                orient="records"
+            ),
+
+            "holdings":
+
+            holdings.fillna(
+                ""
+            ).to_dict(
+                orient="records"
+            )
         }
 
     except Exception as e:
 
         return {
-            "status": "error",
-            "message": str(e)
+
+            "status":"error",
+
+            "message":str(e)
         }
