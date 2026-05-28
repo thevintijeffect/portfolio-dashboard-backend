@@ -7,9 +7,9 @@ import json
 
 app = FastAPI()
 
-# ---------------------------------
+# =====================================================
 # GOOGLE AUTH
-# ---------------------------------
+# =====================================================
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets.readonly"
@@ -26,183 +26,254 @@ credentials = Credentials.from_service_account_info(
 
 client = gspread.authorize(credentials)
 
-SHEET_ID="1A9vTee-Jfg8lgLx18-942VuBHkQnrzqI3n2uQOCwOyA"
+SHEET_ID = "1A9vTee-Jfg8lgLx18-942VuBHkQnrzqI3n2uQOCwOyA"
 
-sheet=client.open_by_key(
+sheet = client.open_by_key(
     SHEET_ID
 )
 
-# ---------------------------------
+# =====================================================
 # FX RATES
-# manually maintained initially
-# ---------------------------------
+# Temporary manual FX table
+# We will automate later
+# =====================================================
 
 FX_TO_SGD = {
 
-    "SGD":1,
+    "SGD": 1.0,
 
-    "USD":1.35,
+    "USD": 1.35,
 
-    "INR":0.016,
+    "INR": 0.016,
 
-    "AUD":0.88,
+    "AUD": 0.88,
 
-    "GBP":1.82,
+    "GBP": 1.82,
 
-    "EUR":1.55
+    "EUR": 1.55,
+
+    "": 1.0
 }
 
-# ---------------------------------
+# =====================================================
 # ROOT
-# ---------------------------------
+# =====================================================
 
 @app.get("/")
 def root():
 
     return {
 
-        "status":"running",
+        "status": "running",
 
-        "message":"portfolio backend active"
+        "message": "Portfolio backend active"
     }
 
-# ---------------------------------
-# READ SHEETS
-# ---------------------------------
+# =====================================================
+# HELPERS
+# =====================================================
+
+def safe_num(value):
+
+    if value is None:
+        return 0
+
+    if value == "":
+        return 0
+
+    try:
+        return float(value)
+
+    except:
+        return 0
+
 
 def get_sheet(tab):
 
-    ws=sheet.worksheet(tab)
+    ws = sheet.worksheet(tab)
 
-    data=ws.get_all_records()
+    data = ws.get_all_records()
 
     return pd.DataFrame(data)
 
-# ---------------------------------
+
+# =====================================================
 # NORMALIZATION
-# ---------------------------------
+# =====================================================
 
 def normalize_cash(df):
 
-    rows=[]
+    rows = []
 
-    for _,r in df.iterrows():
+    for _, r in df.iterrows():
+
+        asset = str(
+            r.iloc[0]
+        ).strip()
+
+        if asset == "":
+            continue
+
+        value = safe_num(
+            r.iloc[1]
+        )
 
         rows.append({
 
-            "asset":
+            "asset": asset,
 
-            r.iloc[0],
+            "asset_class": "Cash",
 
-            "asset_class":
+            "sub_type": "Cash",
 
-            "Cash",
+            "quantity": 1,
 
-            "sub_type":
+            "current_value": value,
 
-            "Cash",
+            "cost_basis": value,
 
-            "quantity":
+            "currency": "SGD"
 
-            1,
-
-            "current_value":
-
-            float(r.iloc[1]),
-
-            "cost_basis":
-
-            float(r.iloc[1]),
-
-            "currency":
-
-            "SGD"
         })
 
     return pd.DataFrame(rows)
+
 
 def normalize_mf(df):
 
-    rows=[]
+    rows = []
 
-    for _,r in df.iterrows():
+    for _, r in df.iterrows():
+
+        asset = str(
+            r.iloc[0]
+        ).strip()
+
+        if asset == "":
+            continue
 
         rows.append({
 
-            "asset":r.iloc[0],
+            "asset": asset,
 
-            "asset_class":"Mutual Fund",
+            "asset_class": "Mutual Fund",
 
-            "sub_type":"Mutual Fund",
+            "sub_type": "Mutual Fund",
 
-            "quantity":r.iloc[2],
+            "quantity": safe_num(
+                r.iloc[2]
+            ),
 
-            "current_value":r.iloc[4],
+            "current_value": safe_num(
+                r.iloc[4]
+            ),
 
-            "cost_basis":r.iloc[5],
+            "cost_basis": safe_num(
+                r.iloc[5]
+            ),
 
-            "currency":r.iloc[9]
+            "currency": str(
+                r.iloc[9]
+            ).strip()
+
         })
 
     return pd.DataFrame(rows)
+
 
 def normalize_gold(df):
 
-    rows=[]
+    rows = []
 
-    for _,r in df.iterrows():
+    for _, r in df.iterrows():
+
+        asset = str(
+            r.iloc[0]
+        ).strip()
+
+        if asset == "":
+            continue
 
         rows.append({
 
-            "asset":r.iloc[0],
+            "asset": asset,
 
-            "asset_class":"Gold",
+            "asset_class": "Gold",
 
-            "sub_type":"Gold",
+            "sub_type": "Gold",
 
-            "quantity":r.iloc[2],
+            "quantity": safe_num(
+                r.iloc[2]
+            ),
 
-            "current_value":r.iloc[4],
+            "current_value": safe_num(
+                r.iloc[4]
+            ),
 
-            "cost_basis":r.iloc[6],
+            "cost_basis": safe_num(
+                r.iloc[6]
+            ),
 
-            "currency":r.iloc[9]
+            "currency": str(
+                r.iloc[9]
+            ).strip()
+
         })
 
     return pd.DataFrame(rows)
+
 
 def normalize_shares(df):
 
-    rows=[]
+    rows = []
 
-    for _,r in df.iterrows():
+    for _, r in df.iterrows():
 
-        asset=r.iloc[0]
+        asset = str(
+            r.iloc[0]
+        ).strip()
 
-        subtype="ETF" if "ETF" in str(asset).upper() else "Stock"
+        if asset == "":
+            continue
+
+        subtype = (
+            "ETF"
+            if "ETF" in asset.upper()
+            else "Stock"
+        )
 
         rows.append({
 
-            "asset":asset,
+            "asset": asset,
 
-            "asset_class":"Equity",
+            "asset_class": "Equity",
 
-            "sub_type":subtype,
+            "sub_type": subtype,
 
-            "quantity":r.iloc[2],
+            "quantity": safe_num(
+                r.iloc[2]
+            ),
 
-            "current_value":r.iloc[4],
+            "current_value": safe_num(
+                r.iloc[4]
+            ),
 
-            "cost_basis":r.iloc[6],
+            "cost_basis": safe_num(
+                r.iloc[6]
+            ),
 
-            "currency":r.iloc[11]
+            "currency": str(
+                r.iloc[11]
+            ).strip()
+
         })
 
     return pd.DataFrame(rows)
 
-# ---------------------------------
-# ANALYTICS ENGINE
-# ---------------------------------
+
+# =====================================================
+# PORTFOLIO API
+# =====================================================
 
 @app.get("/portfolio")
 
@@ -210,100 +281,177 @@ def portfolio():
 
     try:
 
-        cash=normalize_cash(
+        cash = normalize_cash(
             get_sheet("Cash")
         )
 
-        mf=normalize_mf(
+        mf = normalize_mf(
             get_sheet("MFs")
         )
 
-        shares=normalize_shares(
+        shares = normalize_shares(
             get_sheet("Shares")
         )
 
-        gold=normalize_gold(
+        gold = normalize_gold(
             get_sheet("Gold")
         )
 
-        holdings=pd.concat(
+        holdings = pd.concat(
 
-            [cash,mf,shares,gold],
+            [
+                cash,
+                mf,
+                shares,
+                gold
+            ],
 
             ignore_index=True
+
         )
 
-        holdings["fx"]=holdings[
+        holdings["fx"] = holdings[
             "currency"
-        ].map(FX_TO_SGD)
-
-        holdings["value_sgd"]=(
-            holdings["current_value"]
-            *
-            holdings["fx"]
+        ].map(
+            FX_TO_SGD
         )
 
-        holdings["cost_sgd"]=(
-            holdings["cost_basis"]
-            *
-            holdings["fx"]
+        holdings["fx"] = holdings[
+            "fx"
+        ].fillna(
+            1
         )
 
-        holdings["profit_sgd"]=(
-            holdings["value_sgd"]
+        holdings["value_sgd"] = (
+
+            holdings[
+                "current_value"
+            ]
+
+            *
+
+            holdings[
+                "fx"
+            ]
+
+        )
+
+        holdings["cost_sgd"] = (
+
+            holdings[
+                "cost_basis"
+            ]
+
+            *
+
+            holdings[
+                "fx"
+            ]
+
+        )
+
+        holdings["profit_sgd"] = (
+
+            holdings[
+                "value_sgd"
+            ]
+
             -
-            holdings["cost_sgd"]
+
+            holdings[
+                "cost_sgd"
+            ]
+
         )
 
-        total=holdings[
+        total_value = holdings[
             "value_sgd"
         ].sum()
 
-        allocation=(
+        total_profit = holdings[
+            "profit_sgd"
+        ].sum()
+
+        allocation = (
+
             holdings
+
             .groupby(
                 "sub_type"
             )["value_sgd"]
+
             .sum()
-            / total
-            *100
+
+            / total_value
+
+            * 100
+
         )
 
-        currency=(
+        currency = (
+
             holdings
+
             .groupby(
                 "currency"
             )["value_sgd"]
+
             .sum()
-            / total
-            *100
+
+            / total_value
+
+            * 100
+
         )
 
-        top=(
+        holdings["weight_pct"] = (
+
+            holdings[
+                "value_sgd"
+            ]
+
+            /
+
+            total_value
+
+            * 100
+
+        )
+
+        top_holdings = (
+
             holdings
+
             .sort_values(
+
                 "value_sgd",
+
                 ascending=False
+
             )
+
             .head(10)
+
         )
 
         return {
 
-            "summary":{
+            "summary": {
 
                 "networth_sgd":
 
-                round(total,2),
+                round(
+                    total_value,
+                    2
+                ),
 
                 "profit_sgd":
 
                 round(
-                    holdings[
-                        "profit_sgd"
-                    ].sum(),
+                    total_profit,
                     2
                 )
+
             },
 
             "allocation":
@@ -320,29 +468,45 @@ def portfolio():
 
             "top_holdings":
 
-            top[
+            top_holdings[
                 [
+
                     "asset",
-                    "value_sgd"
+
+                    "value_sgd",
+
+                    "weight_pct"
+
                 ]
-            ].to_dict(
+
+            ].round(
+                2
+            ).to_dict(
+
                 orient="records"
+
             ),
 
             "holdings":
 
             holdings.fillna(
                 ""
+            ).round(
+                2
             ).to_dict(
+
                 orient="records"
+
             )
+
         }
 
     except Exception as e:
 
         return {
 
-            "status":"error",
+            "status": "error",
 
-            "message":str(e)
+            "message": str(e)
+
         }
