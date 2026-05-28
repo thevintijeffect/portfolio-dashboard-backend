@@ -55,7 +55,7 @@ def safe_num(x):
 
     try:
 
-        if x=="" or x is None:
+        if x is None or x=="":
 
             return 0
 
@@ -66,22 +66,13 @@ def safe_num(x):
         return 0
 
 
-def get_sheet(tab):
+def get_sheet(name):
 
-    ws=sheet.worksheet(tab)
+    ws=sheet.worksheet(name)
 
     return pd.DataFrame(
         ws.get_all_records()
     )
-
-
-def get_value(row,column):
-
-    if column not in row:
-
-        return ""
-
-    return row[column]
 
 
 def normalize_cash(df):
@@ -91,9 +82,9 @@ def normalize_cash(df):
     for _,r in df.iterrows():
 
         asset=str(
-            get_value(
-                r,
-                df.columns[0]
+            r.get(
+                df.columns[0],
+                ""
             )
         ).strip()
 
@@ -102,23 +93,17 @@ def normalize_cash(df):
             continue
 
         value=safe_num(
-
-            get_value(
-                r,
-                df.columns[1]
+            r.get(
+                df.columns[1],
+                0
             )
-
         )
 
         rows.append({
 
             "asset":asset,
 
-            "asset_class":"Cash",
-
             "sub_type":"Cash",
-
-            "quantity":1,
 
             "current_value":value,
 
@@ -138,9 +123,9 @@ def normalize_mf(df):
     for _,r in df.iterrows():
 
         asset=str(
-            get_value(
-                r,
-                df.columns[0]
+            r.get(
+                df.columns[0],
+                ""
             )
         ).strip()
 
@@ -152,35 +137,26 @@ def normalize_mf(df):
 
             "asset":asset,
 
-            "asset_class":"Mutual Fund",
-
             "sub_type":"Mutual Fund",
 
-            "quantity":safe_num(
-                get_value(
-                    r,
-                    df.columns[2]
-                )
-            ),
-
             "current_value":safe_num(
-                get_value(
-                    r,
-                    df.columns[4]
+                r.get(
+                    "Current Value",
+                    0
                 )
             ),
 
             "cost_basis":safe_num(
-                get_value(
-                    r,
-                    df.columns[5]
+                r.get(
+                    "Cost Basis",
+                    0
                 )
             ),
 
             "currency":str(
-                get_value(
-                    r,
-                    df.columns[9]
+                r.get(
+                    "Currency",
+                    "SGD"
                 )
             ).strip()
 
@@ -196,9 +172,9 @@ def normalize_gold(df):
     for _,r in df.iterrows():
 
         asset=str(
-            get_value(
-                r,
-                df.columns[0]
+            r.get(
+                df.columns[0],
+                ""
             )
         ).strip()
 
@@ -210,35 +186,26 @@ def normalize_gold(df):
 
             "asset":asset,
 
-            "asset_class":"Gold",
-
             "sub_type":"Gold",
 
-            "quantity":safe_num(
-                get_value(
-                    r,
-                    df.columns[2]
-                )
-            ),
-
             "current_value":safe_num(
-                get_value(
-                    r,
-                    df.columns[4]
+                r.get(
+                    "Current Value",
+                    0
                 )
             ),
 
             "cost_basis":safe_num(
-                get_value(
-                    r,
-                    df.columns[6]
+                r.get(
+                    "Cost Basis",
+                    0
                 )
             ),
 
             "currency":str(
-                get_value(
-                    r,
-                    df.columns[9]
+                r.get(
+                    "Currency",
+                    "SGD"
                 )
             ).strip()
 
@@ -254,9 +221,9 @@ def normalize_shares(df):
     for _,r in df.iterrows():
 
         asset=str(
-            get_value(
-                r,
-                df.columns[0]
+            r.get(
+                df.columns[0],
+                ""
             )
         ).strip()
 
@@ -274,35 +241,26 @@ def normalize_shares(df):
 
             "asset":asset,
 
-            "asset_class":"Equity",
-
             "sub_type":subtype,
 
-            "quantity":safe_num(
-                get_value(
-                    r,
-                    df.columns[2]
-                )
-            ),
-
             "current_value":safe_num(
-                get_value(
-                    r,
-                    df.columns[4]
+                r.get(
+                    "Current Value",
+                    0
                 )
             ),
 
             "cost_basis":safe_num(
-                get_value(
-                    r,
-                    df.columns[6]
+                r.get(
+                    "Cost Basis",
+                    0
                 )
             ),
 
             "currency":str(
-                get_value(
-                    r,
-                    df.columns[-1]
+                r.get(
+                    "Currency",
+                    "SGD"
                 )
             ).strip()
 
@@ -320,25 +278,33 @@ def portfolio():
 
         holdings.extend(
             normalize_cash(
-                get_sheet("Cash")
+                get_sheet(
+                    "Cash"
+                )
             )
         )
 
         holdings.extend(
             normalize_mf(
-                get_sheet("MFs")
+                get_sheet(
+                    "MFs"
+                )
             )
         )
 
         holdings.extend(
             normalize_shares(
-                get_sheet("Shares")
+                get_sheet(
+                    "Shares"
+                )
             )
         )
 
         holdings.extend(
             normalize_gold(
-                get_sheet("Gold")
+                get_sheet(
+                    "Gold"
+                )
             )
         )
 
@@ -350,24 +316,38 @@ def portfolio():
             "currency"
         ].map(
             FX_TO_SGD
-        ).fillna(1)
+        ).fillna(
+            1
+        )
 
         df["value_sgd"]=(
-            df["current_value"]
+            df[
+                "current_value"
+            ]
             *
-            df["fx"]
+            df[
+                "fx"
+            ]
         )
 
         df["cost_sgd"]=(
-            df["cost_basis"]
+            df[
+                "cost_basis"
+            ]
             *
-            df["fx"]
+            df[
+                "fx"
+            ]
         )
 
         df["profit_sgd"]=(
-            df["value_sgd"]
+            df[
+                "value_sgd"
+            ]
             -
-            df["cost_sgd"]
+            df[
+                "cost_sgd"
+            ]
         )
 
         total=df[
@@ -377,28 +357,44 @@ def portfolio():
         allocation=(
             df.groupby(
                 "sub_type"
-            )["value_sgd"]
-            .sum()/total*100
+            )[
+                "value_sgd"
+            ].sum()
+            /
+            total
+            *
+            100
         )
 
         currency=(
             df.groupby(
                 "currency"
-            )["value_sgd"]
-            .sum()/total*100
+            )[
+                "value_sgd"
+            ].sum()
+            /
+            total
+            *
+            100
         )
 
-        top=df.sort_values(
-            "value_sgd",
-            ascending=False
-        ).head(10)
+        top=(
+            df.sort_values(
+                "value_sgd",
+                ascending=False
+            )
+            .head(10)
+        )
 
         return {
 
             "summary":{
 
                 "networth_sgd":
-                round(total,2),
+                round(
+                    total,
+                    2
+                ),
 
                 "profit_sgd":
                 round(
