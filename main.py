@@ -582,7 +582,13 @@ def debug():
 
         gold = get_sheet("Gold")
 
+        cash = get_sheet("Cash")
+
         return {
+
+            "cash_columns":
+
+            cash.columns.tolist(),
 
             "mf_columns":
 
