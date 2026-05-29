@@ -7,36 +7,28 @@ import json
 
 app = FastAPI()
 
-# ==========================================
-# AUTH
-# ==========================================
-
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets.readonly"
 ]
 
-creds_dict = json.loads(
+creds_dict=json.loads(
     os.environ["GOOGLE_CREDS"]
 )
 
-credentials = Credentials.from_service_account_info(
+credentials=Credentials.from_service_account_info(
     creds_dict,
     scopes=SCOPES
 )
 
-client = gspread.authorize(
+client=gspread.authorize(
     credentials
 )
 
-sheet = client.open_by_key(
+sheet=client.open_by_key(
     "1A9vTee-Jfg8lgLx18-942VuBHkQnrzqI3n2uQOCwOyA"
 )
 
-# ==========================================
-# FX TABLE
-# ==========================================
-
-FX_TO_SGD = {
+FX_TO_SGD={
 
     "SGD":1,
 
@@ -52,9 +44,21 @@ FX_TO_SGD = {
 
 }
 
-# ==========================================
-# ROOT
-# ==========================================
+EXCLUDE_WORDS=[
+
+    "TOTAL",
+
+    "BALANCE",
+
+    "ACCOUNT",
+
+    "ACCOUNTS",
+
+    "DEBT",
+
+    "ALLOCATED"
+
+]
 
 @app.get("/")
 def root():
@@ -67,9 +71,6 @@ def root():
 
     }
 
-# ==========================================
-# HELPERS
-# ==========================================
 
 def safe_num(x):
 
@@ -92,11 +93,7 @@ def safe_num(x):
 
 def clean_currency(x):
 
-    if x is None:
-
-        return "SGD"
-
-    value = str(
+    value=str(
         x
     ).strip().upper()
 
@@ -107,21 +104,31 @@ def clean_currency(x):
     return value
 
 
+def ignore_row(asset):
+
+    text=str(
+        asset
+    ).upper()
+
+    for word in EXCLUDE_WORDS:
+
+        if word in text:
+
+            return True
+
+    return False
+
+
 def get_sheet(tab):
 
-    ws = sheet.worksheet(
+    ws=sheet.worksheet(
         tab
     )
 
-    data = ws.get_all_records()
-
     return pd.DataFrame(
-        data
+        ws.get_all_records()
     )
 
-# ==========================================
-# NORMALIZATION
-# ==========================================
 
 def normalize_cash(df):
 
@@ -129,16 +136,20 @@ def normalize_cash(df):
 
     for _,r in df.iterrows():
 
-        asset = str(
-            r.iloc[0]
+        asset=str(
+            r["MM Funds name"]
         ).strip()
 
         if asset=="":
 
             continue
 
-        value = safe_num(
-            r.iloc[1]
+        if ignore_row(asset):
+
+            continue
+
+        value=safe_num(
+            r["Current Value"]
         )
 
         rows.append({
@@ -164,8 +175,8 @@ def normalize_mf(df):
 
     for _,r in df.iterrows():
 
-        asset = str(
-            r.iloc[0]
+        asset=str(
+            r["MF - SK"]
         ).strip()
 
         if asset=="":
@@ -181,28 +192,68 @@ def normalize_mf(df):
             "current_value":
 
             safe_num(
-                r.get(
-                    "Current Value",
-                    0
-                )
+                r["Current Value"]
             ),
 
             "cost_basis":
 
             safe_num(
-                r.get(
-                    "Cost Basis",
-                    0
-                )
+                r["Invested Amount"]
             ),
 
             "currency":
 
             clean_currency(
-                r.get(
-                    "Currency",
-                    "SGD"
-                )
+                r[" Currency "]
+            )
+
+        })
+
+    return rows
+
+
+def normalize_shares(df):
+
+    rows=[]
+
+    for _,r in df.iterrows():
+
+        asset=str(
+            r["Company"]
+        ).strip()
+
+        if asset=="":
+
+            continue
+
+        subtype=(
+            "ETF"
+            if "ETF" in asset.upper()
+            else "Stock"
+        )
+
+        rows.append({
+
+            "asset":asset,
+
+            "sub_type":subtype,
+
+            "current_value":
+
+            safe_num(
+                r["Current Market Value"]
+            ),
+
+            "cost_basis":
+
+            safe_num(
+                r["Investment Value"]
+            ),
+
+            "currency":
+
+            clean_currency(
+                r[" Currency "]
             )
 
         })
@@ -216,8 +267,8 @@ def normalize_gold(df):
 
     for _,r in df.iterrows():
 
-        asset = str(
-            r.iloc[0]
+        asset=str(
+            r["Company"]
         ).strip()
 
         if asset=="":
@@ -233,209 +284,86 @@ def normalize_gold(df):
             "current_value":
 
             safe_num(
-                r.get(
-                    "Current Value",
-                    0
-                )
+                r["Current Market Value"]
             ),
 
             "cost_basis":
 
             safe_num(
-                r.get(
-                    "Cost Basis",
-                    0
-                )
+                r["Investment Value"]
             ),
 
             "currency":
 
             clean_currency(
-                r.get(
-                    "Currency",
-                    "SGD"
-                )
+                r[" Currency "]
             )
 
         })
 
     return rows
 
-
-def normalize_shares(df):
-
-    rows=[]
-
-    for _,r in df.iterrows():
-
-        asset = str(
-            r.iloc[0]
-        ).strip()
-
-        if asset=="":
-
-            continue
-
-        subtype = (
-
-            "ETF"
-
-            if "ETF" in asset.upper()
-
-            else "Stock"
-
-        )
-
-        rows.append({
-
-            "asset":asset,
-
-            "sub_type":subtype,
-
-            "current_value":
-
-            safe_num(
-                r.get(
-                    "Current Value",
-                    0
-                )
-            ),
-
-            "cost_basis":
-
-            safe_num(
-                r.get(
-                    "Cost Basis",
-                    0
-                )
-            ),
-
-            "currency":
-
-            clean_currency(
-                r.get(
-                    "Currency",
-                    "SGD"
-                )
-            )
-
-        })
-
-    return rows
-
-# ==========================================
-# BUILD HOLDINGS
-# ==========================================
 
 def build_holdings():
 
     holdings=[]
 
     holdings.extend(
-
         normalize_cash(
-
-            get_sheet(
-                "Cash"
-            )
-
+            get_sheet("Cash")
         )
-
     )
 
     holdings.extend(
-
         normalize_mf(
-
-            get_sheet(
-                "MFs"
-            )
-
+            get_sheet("MFs")
         )
-
     )
 
     holdings.extend(
-
         normalize_shares(
-
-            get_sheet(
-                "Shares"
-            )
-
+            get_sheet("Shares")
         )
-
     )
 
     holdings.extend(
-
         normalize_gold(
-
-            get_sheet(
-                "Gold"
-            )
-
+            get_sheet("Gold")
         )
-
     )
 
-    df = pd.DataFrame(
+    df=pd.DataFrame(
         holdings
     )
 
-    df["fx"] = df[
+    df["fx"]=df[
         "currency"
     ].map(
         FX_TO_SGD
-    ).fillna(1)
+    ).fillna(
+        1
+    )
 
     df["value_sgd"]=(
-
-        df[
-            "current_value"
-        ]
-
+        df["current_value"]
         *
-
-        df[
-            "fx"
-        ]
-
+        df["fx"]
     )
 
     df["cost_sgd"]=(
-
-        df[
-            "cost_basis"
-        ]
-
+        df["cost_basis"]
         *
-
-        df[
-            "fx"
-        ]
-
+        df["fx"]
     )
 
     df["profit_sgd"]=(
-
-        df[
-            "value_sgd"
-        ]
-
+        df["value_sgd"]
         -
-
-        df[
-            "cost_sgd"
-        ]
-
+        df["cost_sgd"]
     )
 
     return df
 
-# ==========================================
-# PORTFOLIO
-# ==========================================
 
 @app.get("/portfolio")
 
@@ -443,9 +371,9 @@ def portfolio():
 
     try:
 
-        df = build_holdings()
+        df=build_holdings()
 
-        total = df[
+        total=df[
             "value_sgd"
         ].sum()
 
@@ -489,14 +417,11 @@ def portfolio():
 
         )
 
-        top = (
+        top=(
 
             df.sort_values(
-
                 "value_sgd",
-
                 ascending=False
-
             )
 
             .head(10)
@@ -541,13 +466,9 @@ def portfolio():
 
             top[
                 [
-
                     "asset",
-
                     "value_sgd"
-
                 ]
-
             ].round(
                 2
             ).to_dict(
@@ -563,53 +484,5 @@ def portfolio():
             "status":"error",
 
             "message":str(e)
-
-        }
-
-# ==========================================
-# DEBUG
-# ==========================================
-
-@app.get("/debug")
-
-def debug():
-
-    try:
-
-        mf = get_sheet("MFs")
-
-        shares = get_sheet("Shares")
-
-        gold = get_sheet("Gold")
-
-        cash = get_sheet("Cash")
-
-        return {
-
-            "cash_columns":
-
-            cash.columns.tolist(),
-
-            "mf_columns":
-
-            mf.columns.tolist(),
-
-            "shares_columns":
-
-            shares.columns.tolist(),
-
-            "gold_columns":
-
-            gold.columns.tolist()
-
-        }
-
-    except Exception as e:
-
-        return {
-
-            "error":
-
-            str(e)
 
         }
