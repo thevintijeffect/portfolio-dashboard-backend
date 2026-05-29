@@ -7,482 +7,312 @@ import json
 
 app = FastAPI()
 
+# =====================================================
+# AUTH
+# =====================================================
+
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets.readonly"
 ]
 
-creds_dict=json.loads(
+creds_dict = json.loads(
     os.environ["GOOGLE_CREDS"]
 )
 
-credentials=Credentials.from_service_account_info(
+credentials = Credentials.from_service_account_info(
     creds_dict,
     scopes=SCOPES
 )
 
-client=gspread.authorize(
-    credentials
-)
+client = gspread.authorize(credentials)
 
-sheet=client.open_by_key(
+sheet = client.open_by_key(
     "1A9vTee-Jfg8lgLx18-942VuBHkQnrzqI3n2uQOCwOyA"
 )
 
-FX_TO_SGD={
+# =====================================================
+# FX RATES
+# =====================================================
 
-    "SGD":1,
-
-    "USD":1.35,
-
-    "INR":0.016,
-
-    "AUD":0.88,
-
-    "GBP":1.82,
-
-    "EUR":1.55
-
+FX = {
+    "SGD": 1.0,
+    "USD": 1.35,
+    "INR": 0.016,
+    "EUR": 1.55,
+    "GBP": 1.82,
+    "AUD": 0.88
 }
 
-EXCLUDE_WORDS=[
+VALID_CURRENCIES = set(FX.keys())
 
-    "TOTAL",
-
-    "BALANCE",
-
-    "ACCOUNT",
-
-    "ACCOUNTS",
-
-    "DEBT",
-
-    "ALLOCATED"
-
-]
+# =====================================================
+# ROOT
+# =====================================================
 
 @app.get("/")
 def root():
-
     return {
-
-        "status":"running",
-
-        "message":"Portfolio backend active"
-
+        "status": "running",
+        "message": "Portfolio backend active"
     }
 
+# =====================================================
+# HELPERS
+# =====================================================
 
-def safe_num(x):
-
+def safe_float(x):
     try:
-
         if x is None:
-
-            return 0
-
-        if str(x).strip()=="":
-
-            return 0
-
+            return 0.0
+        x = str(x).strip()
+        if x == "" or x.lower() == "nan":
+            return 0.0
         return float(x)
-
     except:
-
-        return 0
+        return 0.0
 
 
 def clean_currency(x):
+    if x is None:
+        return None
 
-    value=str(
-        x
-    ).strip().upper()
+    x = str(x).strip().upper()
 
-    if value=="":
+    # remove junk values
+    if x not in VALID_CURRENCIES:
+        return None
 
-        return "SGD"
-
-    return value
-
-
-def ignore_row(asset):
-
-    text=str(
-        asset
-    ).upper()
-
-    for word in EXCLUDE_WORDS:
-
-        if word in text:
-
-            return True
-
-    return False
+    return x
 
 
-def get_sheet(tab):
+def is_invalid_asset(name):
+    if name is None:
+        return True
 
-    ws=sheet.worksheet(
-        tab
-    )
+    name = str(name).strip().upper()
 
-    return pd.DataFrame(
-        ws.get_all_records()
-    )
+    invalid_keywords = [
+        "TOTAL",
+        "BALANCE",
+        "ACCOUNT",
+        "ACCOUNTS",
+        "DEBT",
+        "GAIN",
+        "LOSS",
+        "REALISED",
+        "UNREALISED",
+        "CURRENCY"
+    ]
 
+    if name == "":
+        return True
+
+    return any(k in name for k in invalid_keywords)
+
+# =====================================================
+# SHEET LOADER
+# =====================================================
+
+def get_sheet(name):
+    ws = sheet.worksheet(name)
+    return pd.DataFrame(ws.get_all_records())
+
+# =====================================================
+# NORMALIZERS
+# =====================================================
 
 def normalize_cash(df):
+    rows = []
 
-    rows=[]
+    for _, r in df.iterrows():
 
-    for _,r in df.iterrows():
+        asset = str(r["MM Funds name"]).strip()
 
-        asset=str(
-            r["MM Funds name"]
-        ).strip()
-
-        if asset=="":
-
+        if is_invalid_asset(asset):
             continue
 
-        if ignore_row(asset):
+        value = safe_float(r["Current Value"])
 
+        if value <= 0:
             continue
-
-        value=safe_num(
-            r["Current Value"]
-        )
 
         rows.append({
-
-            "asset":asset,
-
-            "sub_type":"Cash",
-
-            "current_value":value,
-
-            "cost_basis":value,
-
-            "currency":"SGD"
-
+            "asset": asset,
+            "sub_type": "Cash",
+            "current_value": value,
+            "cost_basis": value,
+            "currency": "SGD"
         })
 
     return rows
 
 
 def normalize_mf(df):
+    rows = []
 
-    rows=[]
+    for _, r in df.iterrows():
 
-    for _,r in df.iterrows():
+        asset = str(r["MF - SK"]).strip()
 
-        asset=str(
-            r["MF - SK"]
-        ).strip()
+        if is_invalid_asset(asset):
+            continue
 
-        if asset=="":
+        currency = clean_currency(r.get(" Currency "))
 
+        if currency is None:
             continue
 
         rows.append({
-
-            "asset":asset,
-
-            "sub_type":"Mutual Fund",
-
-            "current_value":
-
-            safe_num(
-                r["Current Value"]
-            ),
-
-            "cost_basis":
-
-            safe_num(
-                r["Invested Amount"]
-            ),
-
-            "currency":
-
-            clean_currency(
-                r[" Currency "]
-            )
-
+            "asset": asset,
+            "sub_type": "Mutual Fund",
+            "current_value": safe_float(r["Current Value"]),
+            "cost_basis": safe_float(r["Invested Amount"]),
+            "currency": currency
         })
 
     return rows
 
 
 def normalize_shares(df):
+    rows = []
 
-    rows=[]
+    for _, r in df.iterrows():
 
-    for _,r in df.iterrows():
+        asset = str(r["Company"]).strip()
 
-        asset=str(
-            r["Company"]
-        ).strip()
-
-        if asset=="":
-
+        if is_invalid_asset(asset):
             continue
 
-        subtype=(
-            "ETF"
-            if "ETF" in asset.upper()
-            else "Stock"
-        )
+        currency = clean_currency(r.get(" Currency "))
+
+        if currency is None:
+            continue
+
+        subtype = "ETF" if "ETF" in asset.upper() else "Stock"
 
         rows.append({
-
-            "asset":asset,
-
-            "sub_type":subtype,
-
-            "current_value":
-
-            safe_num(
-                r["Current Market Value"]
-            ),
-
-            "cost_basis":
-
-            safe_num(
-                r["Investment Value"]
-            ),
-
-            "currency":
-
-            clean_currency(
-                r[" Currency "]
-            )
-
+            "asset": asset,
+            "sub_type": subtype,
+            "current_value": safe_float(r["Current Market Value"]),
+            "cost_basis": safe_float(r["Investment Value"]),
+            "currency": currency
         })
 
     return rows
 
 
 def normalize_gold(df):
+    rows = []
 
-    rows=[]
+    for _, r in df.iterrows():
 
-    for _,r in df.iterrows():
+        asset = str(r["Company"]).strip()
 
-        asset=str(
-            r["Company"]
-        ).strip()
+        if is_invalid_asset(asset):
+            continue
 
-        if asset=="":
+        currency = clean_currency(r.get(" Currency "))
 
+        if currency is None:
             continue
 
         rows.append({
-
-            "asset":asset,
-
-            "sub_type":"Gold",
-
-            "current_value":
-
-            safe_num(
-                r["Current Market Value"]
-            ),
-
-            "cost_basis":
-
-            safe_num(
-                r["Investment Value"]
-            ),
-
-            "currency":
-
-            clean_currency(
-                r[" Currency "]
-            )
-
+            "asset": asset,
+            "sub_type": "Gold",
+            "current_value": safe_float(r["Current Market Value"]),
+            "cost_basis": safe_float(r["Investment Value"]),
+            "currency": currency
         })
 
     return rows
 
+# =====================================================
+# BUILD PORTFOLIO
+# =====================================================
 
-def build_holdings():
+def build_df():
 
-    holdings=[]
+    holdings = []
 
-    holdings.extend(
-        normalize_cash(
-            get_sheet("Cash")
-        )
-    )
+    holdings += normalize_cash(get_sheet("Cash"))
+    holdings += normalize_mf(get_sheet("MFs"))
+    holdings += normalize_shares(get_sheet("Shares"))
+    holdings += normalize_gold(get_sheet("Gold"))
 
-    holdings.extend(
-        normalize_mf(
-            get_sheet("MFs")
-        )
-    )
+    df = pd.DataFrame(holdings)
 
-    holdings.extend(
-        normalize_shares(
-            get_sheet("Shares")
-        )
-    )
+    df["fx"] = df["currency"].map(FX).fillna(1.0)
 
-    holdings.extend(
-        normalize_gold(
-            get_sheet("Gold")
-        )
-    )
-
-    df=pd.DataFrame(
-        holdings
-    )
-
-    df["fx"]=df[
-        "currency"
-    ].map(
-        FX_TO_SGD
-    ).fillna(
-        1
-    )
-
-    df["value_sgd"]=(
-        df["current_value"]
-        *
-        df["fx"]
-    )
-
-    df["cost_sgd"]=(
-        df["cost_basis"]
-        *
-        df["fx"]
-    )
-
-    df["profit_sgd"]=(
-        df["value_sgd"]
-        -
-        df["cost_sgd"]
-    )
+    df["value_sgd"] = df["current_value"] * df["fx"]
+    df["cost_sgd"] = df["cost_basis"] * df["fx"]
+    df["profit_sgd"] = df["value_sgd"] - df["cost_sgd"]
 
     return df
 
+# =====================================================
+# PORTFOLIO API
+# =====================================================
 
 @app.get("/portfolio")
-
 def portfolio():
 
     try:
 
-        df=build_holdings()
+        df = build_df()
 
-        total=df[
-            "value_sgd"
-        ].sum()
+        total = df["value_sgd"].sum()
 
-        allocation=(
-
-            df.groupby(
-                "sub_type"
-            )[
-                "value_sgd"
-            ]
-
-            .sum()
-
-            /
-
-            total
-
-            *
-
-            100
-
+        allocation = (
+            df.groupby("sub_type")["value_sgd"].sum()
+            / total * 100
         )
 
-        currency=(
+        # STRICT currency filtering (prevents junk)
+        df_currency = df[df["currency"].isin(VALID_CURRENCIES)]
 
-            df.groupby(
-                "currency"
-            )[
-                "value_sgd"
-            ]
-
-            .sum()
-
-            /
-
-            total
-
-            *
-
-            100
-
+        currency = (
+            df_currency.groupby("currency")["value_sgd"].sum()
+            / total * 100
         )
 
-        top=(
-
-            df.sort_values(
-                "value_sgd",
-                ascending=False
-            )
-
-            .head(10)
-
-        )
+        top = df.sort_values("value_sgd", ascending=False).head(10)
 
         return {
-
-            "summary":{
-
-                "networth_sgd":
-
-                round(
-                    total,
-                    2
-                ),
-
-                "profit_sgd":
-
-                round(
-                    df[
-                        "profit_sgd"
-                    ].sum(),
-                    2
-                )
-
+            "summary": {
+                "networth_sgd": round(total, 2),
+                "profit_sgd": round(df["profit_sgd"].sum(), 2)
             },
-
-            "allocation":
-
-            allocation.round(
-                2
-            ).to_dict(),
-
-            "currency_exposure":
-
-            currency.round(
-                2
-            ).to_dict(),
-
-            "top_holdings":
-
-            top[
-                [
-                    "asset",
-                    "value_sgd"
-                ]
-            ].round(
-                2
-            ).to_dict(
-                orient="records"
-            )
-
+            "allocation": allocation.round(2).to_dict(),
+            "currency_exposure": currency.round(2).to_dict(),
+            "top_holdings": top[["asset", "value_sgd"]]
+                .round(2)
+                .to_dict(orient="records")
         }
 
     except Exception as e:
+        return {
+            "status": "error",
+            "message": str(e)
+        }
+
+# =====================================================
+# DEBUG (CLEAN)
+# =====================================================
+
+@app.get("/debug")
+def debug():
+
+    try:
+
+        df = build_df()
 
         return {
+            "currencies_raw": df["currency"].unique().tolist(),
+            "asset_types": df["sub_type"].value_counts().to_dict(),
+            "sample_rows": df.head(15).to_dict(orient="records")
+        }
 
-            "status":"error",
-
-            "message":str(e)
-
+    except Exception as e:
+        return {
+            "error": str(e)
         }
