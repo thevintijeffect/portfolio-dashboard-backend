@@ -576,41 +576,25 @@ def debug():
 
     try:
 
-        df = build_holdings()
+        mf = get_sheet("MFs")
+
+        shares = get_sheet("Shares")
+
+        gold = get_sheet("Gold")
 
         return {
 
-            "currencies":
+            "mf_columns":
 
-            sorted(
+            mf.columns.tolist(),
 
-                df[
-                    "currency"
-                ]
+            "shares_columns":
 
-                .unique()
+            shares.columns.tolist(),
 
-                .tolist()
+            "gold_columns":
 
-            ),
-
-            "asset_types":
-
-            df[
-                "sub_type"
-            ]
-
-            .value_counts()
-
-            .to_dict(),
-
-            "sample_rows":
-
-            df.head(
-                20
-            ).to_dict(
-                orient="records"
-            )
+            gold.columns.tolist()
 
         }
 
