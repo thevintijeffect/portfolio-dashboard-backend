@@ -492,169 +492,105 @@ def build_df():
 
 def analytics_engine(df):
 
-    total=df[
-        "value_sgd"
-    ].sum()
+    total = df["value_sgd"].sum()
 
-    country_map={
+    # =========================
+    # COUNTRY EXPOSURE
+    # =========================
 
-        "USD":"US",
-
-        "INR":"India",
-
-        "SGD":"Singapore",
-
-        "AUD":"Australia",
-
-        "GBP":"UK",
-
-        "EUR":"Europe"
-
+    country_map = {
+        "USD": "US",
+        "INR": "India",
+        "SGD": "Singapore",
+        "AUD": "Australia",
+        "GBP": "UK",
+        "EUR": "Europe"
     }
 
-    df["country"]=df[
-        "currency"
-    ].map(
-        country_map
+    df["country"] = df["currency"].map(country_map)
+
+    country = (
+        df.groupby("country")["value_sgd"].sum()
+        / total * 100
     )
 
-    country=(
+    # =========================
+    # CONCENTRATION
+    # =========================
 
-        df.groupby(
-            "country"
-        )[
-            "value_sgd"
-        ]
+    weights = df["value_sgd"] / total
 
-        .sum()
+    largest = weights.max() * 100
+    top5 = weights.nlargest(5).sum() * 100
+    top10 = weights.nlargest(10).sum() * 100
 
-        /
+    # =========================
+    # HERFINDAHL INDEX
+    # =========================
 
-        total
+    hhi = (weights.pow(2).sum()) * 10000
 
-        *
-
-        100
-
-    )
-
-    holding_pct=(
-
-        df[
-            "value_sgd"
-        ]
-
-        /
-
-        total
-
-    )
-
-    largest=round(
-        holding_pct.max()*100,
-        2
-    )
-
-    top5=round(
-        holding_pct.nlargest(
-            5
-        ).sum()*100,
-        2
-    )
-
-    top10=round(
-        holding_pct.nlargest(
-            10
-        ).sum()*100,
-        2
-    )
-
-    hhi=round(
-
-        holding_pct.pow(
-            2
-        ).sum()
-
-        *
-
-        10000,
-
-        0
-
-    )
+    # =========================
+    # DIVERSIFICATION SCORE (FIXED)
+    # =========================
 
     score = 100
 
-score -= min(30, (largest_holding_pct - 10) * 2)
-score -= min(30, (top5_pct - 30))
-score -= min(20, (hhi - 200) / 20)
+    # Penalty 1: largest holding
+    score -= max(0, (largest - 8) * 1.5)
 
-score = max(min(score, 100), 0)
-    risks=[]
+    # Penalty 2: top 5 concentration
+    score -= max(0, (top5 - 30) * 0.8)
 
-    if largest>15:
+    # Penalty 3: top 10 concentration
+    score -= max(0, (top10 - 50) * 0.5)
 
-        risks.append(
-            "Large single holding concentration"
-        )
+    # Penalty 4: HHI (scaled)
+    score -= max(0, (hhi - 200) / 20)
 
-    if top5>50:
+    # Clamp
+    score = max(min(score, 100), 0)
 
-        risks.append(
-            "Top holdings concentration elevated"
-        )
+    # =========================
+    # RISK SIGNALS
+    # =========================
 
-    if country.get(
-        "US",
-        0
-    )>50:
+    risks = []
 
-        risks.append(
-            "High USD exposure"
-        )
+    if largest > 12:
+        risks.append("High single stock concentration")
+
+    if top5 > 40:
+        risks.append("Moderate portfolio concentration")
+
+    if country.get("US", 0) > 50:
+        risks.append("High USD exposure")
+
+    if hhi > 600:
+        risks.append("Low diversification")
+
+    # =========================
+    # OUTPUT
+    # =========================
 
     return {
 
         "country_exposure":
+        country.round(2).to_dict(),
 
-        country.round(
-            2
-        ).to_dict(),
-
-        "concentration":{
-
-            "largest_holding_pct":
-
-            largest,
-
-            "top5_pct":
-
-            top5,
-
-            "top10_pct":
-
-            top10
-
+        "concentration": {
+            "largest_holding_pct": round(largest, 2),
+            "top5_pct": round(top5, 2),
+            "top10_pct": round(top10, 2)
         },
 
-        "diversification":{
-
-            "score":
-
-            score,
-
-            "hhi":
-
-            hhi
-
+        "diversification": {
+            "score": round(score, 2),
+            "hhi": round(hhi, 2)
         },
 
-        "risk_signals":
-
-        risks
-
+        "risk_signals": risks
     }
-
 # =====================================================
 # PORTFOLIO
 # =====================================================
