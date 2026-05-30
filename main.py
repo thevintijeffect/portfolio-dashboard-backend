@@ -583,26 +583,13 @@ def analytics_engine(df):
 
     )
 
-    score=100
+    score = 100
 
-    if largest>15:
+score -= min(30, (largest_holding_pct - 10) * 2)
+score -= min(30, (top5_pct - 30))
+score -= min(20, (hhi - 200) / 20)
 
-        score-=20
-
-    if top5>50:
-
-        score-=20
-
-    if hhi>600:
-
-        score-=20
-
-    if len(
-        df.currency.unique()
-    )<3:
-
-        score-=10
-
+score = max(min(score, 100), 0)
     risks=[]
 
     if largest>15:
