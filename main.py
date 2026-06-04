@@ -611,271 +611,69 @@ def analytics_engine(df):
 # =====================================================
 
 @app.get("/portfolio")
-
 def portfolio():
 
-    df=build_df()
+    df = build_df()
+    total = df["value_sgd"].sum()
 
-    total=df[
-        "value_sgd"
-    ].sum()
+    # =====================================
+    # Asset Class Totals
+    # =====================================
 
-# =====================================
-# Asset Class Totals
-# =====================================
-
-asset_class_totals=(
-
-    df.groupby(
-        "sub_type"
-    )[
-        "value_sgd"
-    ]
-
-    .sum()
-
-    .sort_values(
-        ascending=False
+    asset_class_totals = (
+        df.groupby("sub_type")["value_sgd"]
+        .sum()
+        .sort_values(ascending=False)
     )
 
-)
+    asset_class_breakdown = []
 
-asset_class_breakdown=[]
+    for asset_class, total_value in asset_class_totals.items():
 
-for asset_class,total_value in asset_class_totals.items():
-
-    holdings=(
-
-        df[
-            df[
-                "sub_type"
-            ]
-
-            ==
-
-            asset_class
-
-        ]
-
-        .sort_values(
-            "value_sgd",
-            ascending=False
+        holdings = (
+            df[df["sub_type"] == asset_class]
+            .sort_values("value_sgd", ascending=False)
         )
 
+        asset_class_breakdown.append({
+            "asset_class": asset_class,
+            "total_value_sgd": round(total_value, 2),
+            "percentage": round(total_value / total * 100, 2),
+            "holdings": holdings[
+                ["asset", "currency", "value_sgd", "profit_sgd"]
+            ].round(2).to_dict(orient="records")
+        })
+
+    allocation = (
+        df.groupby("sub_type")["value_sgd"].sum()
+        / total * 100
     )
 
-    asset_class_breakdown.append(
-
-        {
-
-            "asset_class":
-
-            asset_class,
-
-            "total_value_sgd":
-
-            round(
-                total_value,
-                2
-            ),
-
-            "percentage":
-
-            round(
-
-                total_value
-
-                /
-
-                total
-
-                *
-
-                100,
-
-                2
-
-            ),
-
-            "holdings":
-
-            holdings[
-                [
-
-                    "asset",
-
-                    "currency",
-
-                    "value_sgd",
-
-                    "profit_sgd"
-
-                ]
-
-            ]
-
-            .round(
-                2
-            )
-
-            .to_dict(
-
-                orient="records"
-
-            )
-
-        }
-
-    )
-    
-    allocation=(
-
-        df.groupby(
-            "sub_type"
-        )[
-            "value_sgd"
-        ]
-
-        .sum()
-
-        /
-
-        total
-
-        *
-
-        100
-
+    currency = (
+        df.groupby("currency")["value_sgd"].sum()
+        / total * 100
     )
 
-    currency=(
-
-        df.groupby(
-            "currency"
-        )[
-            "value_sgd"
-        ]
-
-        .sum()
-
-        /
-
-        total
-
-        *
-
-        100
-
-    )
-
-    top=(
-
-        df.sort_values(
-            "value_sgd",
-            ascending=False
-        )
-
+    top = (
+        df.sort_values("value_sgd", ascending=False)
         .head(10)
-
     )
 
-   return {
-
-    "summary":{
-
-        "networth_sgd":
-
-        round(
-            total,
-            2
-        ),
-
-        "profit_sgd":
-
-        round(
-
-            df[
-                "profit_sgd"
-            ].sum(),
-
-            2
-
-        )
-
-    },
-
-    "allocation":
-
-    allocation.round(
-        2
-    ).to_dict(),
-
-    "currency_exposure":
-
-    currency.round(
-        2
-    ).to_dict(),
-
-    "top_holdings":
-
-    top[
-        [
-
-            "asset",
-
-            "value_sgd"
-
-        ]
-
-    ]
-
-    .round(
-        2
-    )
-
-    .to_dict(
-        orient="records"
-    ),
-
-    # NEW
-
-    "asset_class_breakdown":
-
-    asset_class_breakdown,
-
-    # NEW
-
-    "holdings":
-
-    df[
-
-        [
-
-            "asset",
-
-            "sub_type",
-
-            "currency",
-
-            "value_sgd",
-
-            "profit_sgd"
-
-        ]
-
-    ]
-
-    .round(
-        2
-    )
-
-    .to_dict(
-
-        orient="records"
-
-    )
-
-}
+    return {
+        "summary": {
+            "networth_sgd": round(total, 2),
+            "profit_sgd": round(df["profit_sgd"].sum(), 2)
+        },
+        "allocation": allocation.round(2).to_dict(),
+        "currency_exposure": currency.round(2).to_dict(),
+        "top_holdings": top[
+            ["asset", "value_sgd"]
+        ].round(2).to_dict(orient="records"),
+        "asset_class_breakdown": asset_class_breakdown,
+        "holdings": df[
+            ["asset", "sub_type", "currency", "value_sgd", "profit_sgd"]
+        ].round(2).to_dict(orient="records")
+    }
 
 # =====================================================
 # ANALYTICS ENDPOINT
