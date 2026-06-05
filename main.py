@@ -493,74 +493,100 @@ def normalize_gold(df):
 # BUILD DF
 # =====================================================
 
+# =====================================================
+# BUILD DF
+# =====================================================
+
 def build_df():
 
-    holdings=[]
+    holdings = []
 
     holdings += normalize_cash(
-        get_sheet(
-            "Cash"
-        )
+        get_sheet("Cash")
     )
 
     holdings += normalize_mf(
-        get_sheet(
-            "MFs"
-        )
+        get_sheet("MFs")
     )
 
     holdings += normalize_shares(
-        get_sheet(
-            "Shares"
-        )
+        get_sheet("Shares")
     )
 
     holdings += normalize_gold(
-        get_sheet(
-            "Gold"
-        )
+        get_sheet("Gold")
     )
 
-    df=pd.DataFrame(
+    df = pd.DataFrame(
         holdings
     )
 
-   df["fx"]=df["currency"].map(FX)
+    if df.empty:
 
-df["value_sgd"]=df["market_value"]*df["fx"]
+        return df
 
-df["investment_sgd"]=df["investment_value"]*df["fx"]
+    df["fx"] = df["currency"].map(
+        FX
+    )
 
-df["profit_sgd"]=(
+    df["value_sgd"] = (
 
-    df["value_sgd"]
+        df["market_value"]
 
-    -
+        *
 
-    df["investment_sgd"]
+        df["fx"]
 
-)
+    )
 
-df["profit_pct"]=(
+    df["investment_sgd"] = (
 
-    df["market_value"]
+        df["investment_value"]
 
-    -
+        *
 
-    df["investment_value"]
+        df["fx"]
 
-)
+    )
 
-/
+    df["profit_sgd"] = (
 
-df["investment_value"].replace(
-    0,
-    1
-)
+        df["value_sgd"]
 
-*100
+        -
 
-return df
+        df["investment_sgd"]
+
+    )
+
+    df["profit_pct"] = (
+
+        (
+
+            df["market_value"]
+
+            -
+
+            df["investment_value"]
+
+        )
+
+        /
+
+        df["investment_value"]
+
+        .replace(
+            0,
+            1
+        )
+
+        *
+
+        100
+
+    )
+
+    return df
 
 
 # =====================================================
