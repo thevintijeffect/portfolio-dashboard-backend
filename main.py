@@ -217,17 +217,79 @@ def normalize_cash(df):
 
         rows.append({
 
-            "asset":asset,
+"asset":asset,
 
-            "sub_type":"Cash",
+"sub_type":subtype,
 
-            "current_value":value,
+"currency":currency,
 
-            "cost_basis":value,
+"qty":
 
-            "currency":"SGD"
+safe_float(
 
-        })
+r.get(
+
+"Qty",
+
+0
+
+)
+
+),
+
+"current_price":
+
+safe_float(
+
+r.get(
+
+"Current Price",
+
+0
+
+)
+
+),
+
+"investment_price":
+
+safe_float(
+
+r.get(
+
+"Investment Price",
+
+0
+
+)
+
+),
+
+"market_value":
+
+safe_float(
+
+r.get(
+
+"Current Market Value"
+
+)
+
+),
+
+"investment_value":
+
+safe_float(
+
+r.get(
+
+"Investment Value"
+
+)
+
+)
+
+})
 
     return rows
 
@@ -260,31 +322,79 @@ def normalize_mf(df):
 
         rows.append({
 
-            "asset":asset,
+"asset":asset,
 
-            "sub_type":"Mutual Fund",
+"sub_type":subtype,
 
-            "current_value":
+"currency":currency,
 
-            safe_float(
-                r[
-                    "Current Value"
-                ]
-            ),
+"qty":
 
-            "cost_basis":
+safe_float(
 
-            safe_float(
-                r[
-                    "Invested Amount"
-                ]
-            ),
+r.get(
 
-            "currency":
+"Qty",
 
-            currency
+0
 
-        })
+)
+
+),
+
+"current_price":
+
+safe_float(
+
+r.get(
+
+"Current Price",
+
+0
+
+)
+
+),
+
+"investment_price":
+
+safe_float(
+
+r.get(
+
+"Investment Price",
+
+0
+
+)
+
+),
+
+"market_value":
+
+safe_float(
+
+r.get(
+
+"Current Market Value"
+
+)
+
+),
+
+"investment_value":
+
+safe_float(
+
+r.get(
+
+"Investment Value"
+
+)
+
+)
+
+})
 
     return rows
 
@@ -329,31 +439,79 @@ def normalize_shares(df):
 
         rows.append({
 
-            "asset":asset,
+"asset":asset,
 
-            "sub_type":subtype,
+"sub_type":subtype,
 
-            "current_value":
+"currency":currency,
 
-            safe_float(
-                r[
-                    "Current Market Value"
-                ]
-            ),
+"qty":
 
-            "cost_basis":
+safe_float(
 
-            safe_float(
-                r[
-                    "Investment Value"
-                ]
-            ),
+r.get(
 
-            "currency":
+"Qty",
 
-            currency
+0
 
-        })
+)
+
+),
+
+"current_price":
+
+safe_float(
+
+r.get(
+
+"Current Price",
+
+0
+
+)
+
+),
+
+"investment_price":
+
+safe_float(
+
+r.get(
+
+"Investment Price",
+
+0
+
+)
+
+),
+
+"market_value":
+
+safe_float(
+
+r.get(
+
+"Current Market Value"
+
+)
+
+),
+
+"investment_value":
+
+safe_float(
+
+r.get(
+
+"Investment Value"
+
+)
+
+)
+
+})
 
     return rows
 
@@ -386,31 +544,79 @@ def normalize_gold(df):
 
         rows.append({
 
-            "asset":asset,
+"asset":asset,
 
-            "sub_type":"Gold",
+"sub_type":subtype,
 
-            "current_value":
+"currency":currency,
 
-            safe_float(
-                r[
-                    "Current Market Value"
-                ]
-            ),
+"qty":
 
-            "cost_basis":
+safe_float(
 
-            safe_float(
-                r[
-                    "Investment Value"
-                ]
-            ),
+r.get(
 
-            "currency":
+"Qty",
 
-            currency
+0
 
-        })
+)
+
+),
+
+"current_price":
+
+safe_float(
+
+r.get(
+
+"Current Price",
+
+0
+
+)
+
+),
+
+"investment_price":
+
+safe_float(
+
+r.get(
+
+"Investment Price",
+
+0
+
+)
+
+),
+
+"market_value":
+
+safe_float(
+
+r.get(
+
+"Current Market Value"
+
+)
+
+),
+
+"investment_value":
+
+safe_float(
+
+r.get(
+
+"Investment Value"
+
+)
+
+)
+
+})
 
     return rows
 
@@ -451,55 +657,100 @@ def build_df():
         holdings
     )
 
-    df["fx"]=df[
-        "currency"
-    ].map(
-        FX
+   df["fx"]=df["currency"].map(FX)
+
+df["value_sgd"]=df["market_value"]*df["fx"]
+
+df["investment_sgd"]=df["investment_value"]*df["fx"]
+
+df["profit_sgd"]=(
+
+    df["value_sgd"]
+
+    -
+
+    df["investment_sgd"]
+
+)
+
+df["profit_pct"]=(
+
+    df["market_value"]
+
+    -
+
+    df["investment_value"]
+
+)
+
+/
+
+df["investment_value"].replace(
+    0,
+    1
+)
+
+*100
+
+return df
+
+
+# =====================================================
+# ASSET CLASS SUMMARY
+# =====================================================
+
+def asset_summary(df):
+
+    grouped=(
+
+        df.groupby(
+
+            "sub_type"
+
+        )
+
+        .agg({
+
+            "value_sgd":"sum",
+
+            "investment_sgd":"sum",
+
+            "profit_sgd":"sum"
+
+        })
+
     )
 
-    df["value_sgd"]=(
+    grouped["profit_pct"]=(
 
-        df[
-            "current_value"
-        ]
+        grouped["profit_sgd"]
+
+        /
+
+        grouped["investment_sgd"]
 
         *
 
-        df[
-            "fx"
-        ]
+        100
 
     )
 
-    df["cost_sgd"]=(
+    return (
 
-        df[
-            "cost_basis"
-        ]
+        grouped
 
-        *
+        .round(2)
 
-        df[
-            "fx"
-        ]
+        .reset_index()
 
-    )
+        .to_dict(
 
-    df["profit_sgd"]=(
+            orient="records"
 
-        df[
-            "value_sgd"
-        ]
-
-        -
-
-        df[
-            "cost_sgd"
-        ]
+        )
 
     )
 
-    return df
 
 # =====================================================
 # ANALYTICS ENGINE
@@ -674,6 +925,52 @@ def portfolio():
             ["asset", "sub_type", "currency", "value_sgd", "profit_sgd"]
         ].round(2).to_dict(orient="records")
     }
+
+# =====================================================
+# HOLDINGS ENDPOINT
+# =====================================================
+
+@app.get(
+
+"/holdings/{asset_class}"
+
+)
+
+def holdings(
+
+asset_class:str
+
+):
+
+    df=build_df()
+
+    filtered=(
+
+        df[
+
+            df["sub_type"]
+
+            ==
+
+            asset_class
+
+        ]
+
+    )
+
+    return (
+
+        filtered
+
+        .round(2)
+
+        .to_dict(
+
+            orient="records"
+
+        )
+
+    )
 
 # =====================================================
 # ANALYTICS ENDPOINT
