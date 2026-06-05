@@ -201,9 +201,7 @@ def normalize_cash(df):
             r["MM Funds name"]
         ).strip()
 
-        if invalid_asset(
-            asset
-        ):
+        if invalid_asset(asset):
 
             continue
 
@@ -217,79 +215,23 @@ def normalize_cash(df):
 
         rows.append({
 
-"asset":asset,
+            "asset":asset,
 
-"sub_type":subtype,
+            "sub_type":"Cash",
 
-"currency":currency,
+            "currency":"SGD",
 
-"qty":
+            "qty":1,
 
-safe_float(
+            "current_price":value,
 
-r.get(
+            "investment_price":value,
 
-"Qty",
+            "market_value":value,
 
-0
+            "investment_value":value
 
-)
-
-),
-
-"current_price":
-
-safe_float(
-
-r.get(
-
-"Current Price",
-
-0
-
-)
-
-),
-
-"investment_price":
-
-safe_float(
-
-r.get(
-
-"Investment Price",
-
-0
-
-)
-
-),
-
-"market_value":
-
-safe_float(
-
-r.get(
-
-"Current Market Value"
-
-)
-
-),
-
-"investment_value":
-
-safe_float(
-
-r.get(
-
-"Investment Value"
-
-)
-
-)
-
-})
+        })
 
     return rows
 
@@ -304,9 +246,7 @@ def normalize_mf(df):
             r["MF - SK"]
         ).strip()
 
-        if invalid_asset(
-            asset
-        ):
+        if invalid_asset(asset):
 
             continue
 
@@ -322,79 +262,36 @@ def normalize_mf(df):
 
         rows.append({
 
-"asset":asset,
+            "asset":asset,
 
-"sub_type":subtype,
+            "sub_type":"Mutual Fund",
 
-"currency":currency,
+            "currency":currency,
 
-"qty":
+            "qty":safe_float(
+                r.get(
+                    "Qty",
+                    0
+                )
+            ),
 
-safe_float(
+            "current_price":0,
 
-r.get(
+            "investment_price":0,
 
-"Qty",
+            "market_value":
 
-0
+            safe_float(
+                r["Current Value"]
+            ),
 
-)
+            "investment_value":
 
-),
+            safe_float(
+                r["Invested Amount"]
+            )
 
-"current_price":
-
-safe_float(
-
-r.get(
-
-"Current Price",
-
-0
-
-)
-
-),
-
-"investment_price":
-
-safe_float(
-
-r.get(
-
-"Investment Price",
-
-0
-
-)
-
-),
-
-"market_value":
-
-safe_float(
-
-r.get(
-
-"Current Market Value"
-
-)
-
-),
-
-"investment_value":
-
-safe_float(
-
-r.get(
-
-"Investment Value"
-
-)
-
-)
-
-})
+        })
 
     return rows
 
@@ -526,9 +423,7 @@ def normalize_gold(df):
             r["Company"]
         ).strip()
 
-        if invalid_asset(
-            asset
-        ):
+        if invalid_asset(asset):
 
             continue
 
@@ -544,79 +439,52 @@ def normalize_gold(df):
 
         rows.append({
 
-"asset":asset,
+            "asset":asset,
 
-"sub_type":subtype,
+            "sub_type":"Gold",
 
-"currency":currency,
+            "currency":currency,
 
-"qty":
+            "qty":
 
-safe_float(
+            safe_float(
+                r.get(
+                    "Qty",
+                    0
+                )
+            ),
 
-r.get(
+            "current_price":
 
-"Qty",
+            safe_float(
+                r.get(
+                    "Current Price",
+                    0
+                )
+            ),
 
-0
+            "investment_price":
 
-)
+            safe_float(
+                r.get(
+                    "Investment Price",
+                    0
+                )
+            ),
 
-),
+            "market_value":
 
-"current_price":
+            safe_float(
+                r["Current Market Value"]
+            ),
 
-safe_float(
+            "investment_value":
 
-r.get(
+            safe_float(
+                r["Investment Value"]
+            )
 
-"Current Price",
-
-0
-
-)
-
-),
-
-"investment_price":
-
-safe_float(
-
-r.get(
-
-"Investment Price",
-
-0
-
-)
-
-),
-
-"market_value":
-
-safe_float(
-
-r.get(
-
-"Current Market Value"
-
-)
-
-),
-
-"investment_value":
-
-safe_float(
-
-r.get(
-
-"Investment Value"
-
-)
-
-)
-
-})
+        })
 
     return rows
 
