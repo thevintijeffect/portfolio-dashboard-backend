@@ -759,61 +759,22 @@ def analytics_engine(df):
 def portfolio():
 
     df = build_df()
+
     total = df["value_sgd"].sum()
 
-    # =====================================
-    # Asset Class Totals
-    # =====================================
+    allocation=(
 
-    asset_class_totals = (
-        df.groupby("sub_type")["value_sgd"]
-        .sum()
-        .sort_values(ascending=False)
-    )
+        df.groupby(
 
-   asset_class_breakdown=[]
+            "sub_type"
 
-grouped=(
+        )[
 
-    df.groupby(
-
-        "sub_type"
-
-    )
-
-    .agg({
-
-        "investment_sgd":"sum",
-
-        "value_sgd":"sum",
-
-        "profit_sgd":"sum"
-
-    })
-
-)
-
-for asset_class,row in grouped.iterrows():
-
-    holdings=(
-
-        df[
-
-            df["sub_type"]
-
-            ==
-
-            asset_class
+            "value_sgd"
 
         ]
 
-        .copy()
-
-    )
-
-    holdings["portfolio_pct"]=(
-
-        holdings["value_sgd"]
+        .sum()
 
         /
 
@@ -825,31 +786,23 @@ for asset_class,row in grouped.iterrows():
 
     )
 
-    holdings["unrealised_gain"]=(
+    currency=(
 
-        holdings["market_value"]
+        df.groupby(
 
-        -
+            "currency"
 
-        holdings["investment_value"]
+        )[
 
-    )
+            "value_sgd"
 
-    holdings["unrealised_gain_pct"]=(
+        ]
 
-        holdings["unrealised_gain"]
+        .sum()
 
         /
 
-        holdings["investment_value"]
-
-        .replace(
-
-            0,
-
-            1
-
-        )
+        total
 
         *
 
@@ -857,69 +810,63 @@ for asset_class,row in grouped.iterrows():
 
     )
 
-    asset_class_breakdown.append({
+    top=(
 
-        "asset_class":asset_class,
+        df.sort_values(
 
-        "investment_sgd":
+            "value_sgd",
 
-        round(
+            ascending=False
 
-            row["investment_sgd"],
+        )
 
-            2
+        .head(10)
 
-        ),
+    )
 
-        "value_sgd":
+    asset_class_breakdown=[]
 
-        round(
+    grouped=(
 
-            row["value_sgd"],
+        df.groupby(
 
-            2
+            "sub_type"
 
-        ),
+        )
 
-        "profit_sgd":
+        .agg({
 
-        round(
+            "investment_sgd":"sum",
 
-            row["profit_sgd"],
+            "value_sgd":"sum",
 
-            2
+            "profit_sgd":"sum"
 
-        ),
+        })
 
-        "profit_pct":
+    )
 
-        round(
+    for asset_class,row in grouped.iterrows():
 
-            row["profit_sgd"]
+        holdings=(
 
-            /
+            df[
 
-            max(
+                df["sub_type"]
 
-                row["investment_sgd"],
+                ==
 
-                1
+                asset_class
 
-            )
+            ]
 
-            *
+            .copy()
 
-            100,
+        )
 
-            2
+        holdings["portfolio_pct"]=(
 
-        ),
-
-        "portfolio_pct":
-
-        round(
-
-            row["value_sgd"]
+            holdings["value_sgd"]
 
             /
 
@@ -927,15 +874,203 @@ for asset_class,row in grouped.iterrows():
 
             *
 
-            100,
+            100
+
+        )
+
+        holdings["unrealised_gain"]=(
+
+            holdings["market_value"]
+
+            -
+
+            holdings["investment_value"]
+
+        )
+
+        holdings["unrealised_gain_pct"]=(
+
+            holdings["unrealised_gain"]
+
+            /
+
+            holdings["investment_value"]
+
+            .replace(
+
+                0,
+
+                1
+
+            )
+
+            *
+
+            100
+
+        )
+
+        asset_class_breakdown.append({
+
+            "asset_class":asset_class,
+
+            "investment_sgd":
+
+            round(
+
+                row["investment_sgd"],
+
+                2
+
+            ),
+
+            "value_sgd":
+
+            round(
+
+                row["value_sgd"],
+
+                2
+
+            ),
+
+            "profit_sgd":
+
+            round(
+
+                row["profit_sgd"],
+
+                2
+
+            ),
+
+            "profit_pct":
+
+            round(
+
+                row["profit_sgd"]
+
+                /
+
+                max(
+
+                    row["investment_sgd"],
+
+                    1
+
+                )
+
+                *
+
+                100,
+
+                2
+
+            ),
+
+            "portfolio_pct":
+
+            round(
+
+                row["value_sgd"]
+
+                /
+
+                total
+
+                *
+
+                100,
+
+                2
+
+            ),
+
+            "holdings":
+
+            holdings.round(
+
+                2
+
+            ).to_dict(
+
+                orient="records"
+
+            )
+
+        })
+
+    return {
+
+        "summary":{
+
+            "networth_sgd":
+
+            round(
+
+                total,
+
+                2
+
+            ),
+
+            "profit_sgd":
+
+            round(
+
+                df["profit_sgd"].sum(),
+
+                2
+
+            )
+
+        },
+
+        "allocation":
+
+        allocation.round(
 
             2
 
+        ).to_dict(),
+
+        "currency_exposure":
+
+        currency.round(
+
+            2
+
+        ).to_dict(),
+
+        "top_holdings":
+
+        top[
+
+            [
+
+                "asset",
+
+                "value_sgd"
+
+            ]
+
+        ].round(
+
+            2
+
+        ).to_dict(
+
+            orient="records"
+
         ),
+
+        "asset_class_breakdown":
+
+        asset_class_breakdown,
 
         "holdings":
 
-        holdings.round(
+        df.round(
 
             2
 
@@ -945,7 +1080,7 @@ for asset_class,row in grouped.iterrows():
 
         )
 
-    })
+    }
 
 # =====================================================
 # HOLDINGS ENDPOINT
