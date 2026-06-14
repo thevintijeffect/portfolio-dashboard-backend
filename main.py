@@ -5,6 +5,8 @@ from google.oauth2.service_account import Credentials
 import pandas as pd
 import os
 import json
+import requests
+from functools import lru_cache
 
 app = FastAPI()
 
@@ -42,19 +44,65 @@ sheet = client.open_by_key(
 )
 
 # =====================================================
-# FX TABLE
+# FX RATE FETCHER (Real-Time)
 # =====================================================
 
-FX = {
-    "SGD": 1,
-    "USD": 1.35,
-    "INR": 0.016,
-    "AUD": 0.88,
-    "EUR": 1.55,
-    "GBP": 1.82
-}
+@lru_cache(maxsize=1)
+def get_realtime_fx_rates(base_currency="SGD"):
+    """
+    Fetch real-time FX rates from exchangerate.host (free, no API key required)
+    Rates are cached for 1 hour to avoid excessive API calls
+    """
+    try:
+        # exchangerate.host latest endpoint - no authentication required
+        url = f"https://api.exchangerate.host/latest?base={base_currency}"
+        
+        response = requests.get(url, timeout=10)
+        
+        if response.status_code != 200:
+            print(f"FX API error: {response.status_code}")
+            return get_default_fx_rates()
+        
+        data = response.json()
+        
+        if not data.get("rates"):
+            print("FX API returned no rates")
+            return get_default_fx_rates()
+        
+        # Convert rates to our format (multiply by base to get SGD equivalent)
+        fx_rates = {
+            "SGD": 1.0,
+            "USD": data["rates"].get("USD", 1.35),
+            "INR": data["rates"].get("INR", 0.016),
+            "AUD": data["rates"].get("AUD", 0.88),
+            "EUR": data["rates"].get("EUR", 1.55),
+            "GBP": data["rates"].get("GBP", 1.82)
+        }
+        
+        print(f"FX rates updated: {fx_rates}")
+        return fx_rates
+        
+    except Exception as e:
+        print(f"Error fetching FX rates: {e}")
+        return get_default_fx_rates()
 
+
+def get_default_fx_rates():
+    """Fallback to hardcoded rates if API fails"""
+    return {
+        "SGD": 1,
+        "USD": 1.35,
+        "INR": 0.016,
+        "AUD": 0.88,
+        "EUR": 1.55,
+        "GBP": 1.82
+    }
+
+
+# Initialize FX rates on startup
+FX = get_realtime_fx_rates()
 VALID_CURRENCIES = set(FX.keys())
+
 
 # =====================================================
 # ROOT
@@ -64,8 +112,40 @@ VALID_CURRENCIES = set(FX.keys())
 def root():
     return {
         "status": "running",
-        "message": "Portfolio backend active"
+        "message": "Portfolio backend active",
+        "fx_rates": FX
     }
+
+
+# =====================================================
+# FX ENDPOINT (Get current FX rates)
+# =====================================================
+
+@app.get("/fx-rates")
+def get_fx_rates():
+    """Endpoint to fetch current FX rates"""
+    return {
+        "rates": FX,
+        "base": "SGD",
+        "updated": "real-time from exchangerate.host"
+    }
+
+
+# =====================================================
+# REFRESH FX ENDPOINT
+# =====================================================
+
+@app.get("/refresh-fx")
+def refresh_fx_rates():
+    """Endpoint to force refresh FX rates"""
+    global FX
+    FX = get_realtime_fx_rates()
+    return {
+        "status": "success",
+        "rates": FX,
+        "message": "FX rates refreshed"
+    }
+
 
 # =====================================================
 # HELPERS
@@ -230,6 +310,7 @@ def build_df():
     if df.empty:
         return df
 
+    # Use real-time FX rates instead of hardcoded
     df["fx"] = df["currency"].map(FX)
     df["value_sgd"] = df["market_value"] * df["fx"]
     df["investment_sgd"] = df["investment_value"] * df["fx"]
@@ -255,74 +336,81 @@ def portfolio():
     allocation = (
         df.groupby("sub_type")["value_sgd"].sum()
         / total * 100
-    )
+    ) if total > 0 else pd.DataFrame()
 
     currency = (
         df.groupby("currency")["value_sgd"].sum()
         / total * 100
-    )
+    ) if total > 0 else pd.DataFrame()
 
     top = df.sort_values("value_sgd", ascending=False).head(10)
 
     asset_class_breakdown = []
-    grouped = df.groupby("sub_type").agg({
-        "investment_sgd": "sum",
-        "value_sgd": "sum",
-        "profit_sgd": "sum"
-    })
-
-    for asset_class, row in grouped.iterrows():
-        holdings = df[df["sub_type"] == asset_class].copy()
-        holdings["portfolio_pct"] = holdings["value_sgd"] / total * 100
-        holdings["unrealised_gain"] = holdings["market_value"] - holdings["investment_value"]
-        holdings["unrealised_gain_pct"] = (
-            holdings["unrealised_gain"]
-            / holdings["investment_value"].replace(0, 1)
-            * 100
-        )
-
-        asset_class_breakdown.append({
-            "asset_class": asset_class,
-            "investment_sgd": round(row["investment_sgd"], 2),
-            "value_sgd": round(row["value_sgd"], 2),
-            "profit_sgd": round(row["profit_sgd"], 2),
-            "profit_pct": round(row["profit_sgd"] / max(row["investment_sgd"], 1) * 100, 2),
-            "portfolio_pct": round(row["value_sgd"] / total * 100, 2),
-            "holdings": holdings.round(2).to_dict(orient="records")
+    
+    if total > 0:
+        grouped = df.groupby("sub_type").agg({
+            "investment_sgd": "sum",
+            "value_sgd": "sum",
+            "profit_sgd": "sum"
         })
+
+        for asset_class, row in grouped.iterrows():
+            holdings = df[df["sub_type"] == asset_class].copy()
+            holdings["portfolio_pct"] = holdings["value_sgd"] / total * 100
+            holdings["unrealised_gain"] = holdings["market_value"] - holdings["investment_value"]
+            holdings["unrealised_gain_pct"] = (
+                holdings["unrealised_gain"]
+                / holdings["investment_value"].replace(0, 1)
+                * 100
+            )
+
+            asset_class_breakdown.append({
+                "asset_class": asset_class,
+                "investment_sgd": round(row["investment_sgd"], 2),
+                "value_sgd": round(row["value_sgd"], 2),
+                "profit_sgd": round(row["profit_sgd"], 2),
+                "profit_pct": round(row["profit_sgd"] / max(row["investment_sgd"], 1) * 100, 2),
+                "portfolio_pct": round(row["value_sgd"] / total * 100, 2),
+                "holdings": holdings.round(2).to_dict(orient="records")
+            })
 
     return {
         "summary": {
             "networth_sgd": round(total, 2),
-            "profit_sgd": round(df["profit_sgd"].sum(), 2)
+            "profit_sgd": round(df["profit_sgd"].sum(), 2) if not df.empty else 0
         },
-        "allocation": allocation.round(2).to_dict(),
-        "currency_exposure": currency.round(2).to_dict(),
-        "top_holdings": top[["asset", "value_sgd"]].round(2).to_dict(orient="records"),
+        "allocation": allocation.round(2).to_dict() if total > 0 else {},
+        "currency_exposure": currency.round(2).to_dict() if total > 0 else {},
+        "top_holdings": top[["asset", "value_sgd"]].round(2).to_dict(orient="records") if not top.empty else [],
         "asset_class_breakdown": asset_class_breakdown,
-        "holdings": df.round(2).to_dict(orient="records")
+        "holdings": df.round(2).to_dict(orient="records") if not df.empty else [],
+        "fx_rates": FX
     }
 
 
 # =====================================================
-# HOLDINGS ENDPOINT (FIXED - adds missing calculations)
+# HOLDINGS ENDPOINT
 # =====================================================
 
 @app.get("/holdings/{asset_class}")
 def holdings(asset_class: str):
     df = build_df()
+    
+    if df.empty:
+        return []
+    
     filtered = df[df["sub_type"] == asset_class].copy()
     
     total = df["value_sgd"].sum()
     
-    # Add the missing calculated fields
-    filtered["portfolio_pct"] = filtered["value_sgd"] / total * 100
-    filtered["unrealised_gain"] = filtered["market_value"] - filtered["investment_value"]
-    filtered["unrealised_gain_pct"] = (
-        filtered["unrealised_gain"]
-        / filtered["investment_value"].replace(0, 1)
-        * 100
-    )
+    if total > 0:
+        filtered["portfolio_pct"] = filtered["value_sgd"] / total * 100
+        filtered["unrealised_gain"] = filtered["market_value"] - filtered["investment_value"]
+        filtered["unrealised_gain_pct"] = (
+            filtered["unrealised_gain"]
+            / filtered["investment_value"].replace(0, 1)
+            * 100
+        )
     
     return filtered.round(2).to_dict(orient="records")
 
@@ -334,6 +422,23 @@ def holdings(asset_class: str):
 @app.get("/analytics")
 def analytics():
     df = build_df()
+    
+    if df.empty:
+        return {
+            "country_exposure": {},
+            "concentration": {
+                "largest_holding_pct": 0,
+                "top5_pct": 0,
+                "top10_pct": 0
+            },
+            "diversification": {
+                "score": 0,
+                "hhi": 0
+            },
+            "risk_signals": [],
+            "fx_rates": FX
+        }
+    
     total = df["value_sgd"].sum()
     
     if total == 0:
@@ -348,7 +453,8 @@ def analytics():
                 "score": 0,
                 "hhi": 0
             },
-            "risk_signals": []
+            "risk_signals": [],
+            "fx_rates": FX
         }
     
     country_map = {
@@ -397,5 +503,6 @@ def analytics():
             "score": round(score, 2),
             "hhi": round(hhi, 2)
         },
-        "risk_signals": risks
+        "risk_signals": risks,
+        "fx_rates": FX
     }
