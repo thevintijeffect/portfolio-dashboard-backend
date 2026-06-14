@@ -48,9 +48,12 @@ sheet = client.open_by_key(
 # FX RATE FETCHER (Real-Time, NO HARDCODED FALLBACK)
 # =====================================================
 
+# Replace the FX_CACHE and get_realtime_fx_rates functions with this:
+
 FX_CACHE = {
     "rates": None,
-    "timestamp": 0
+    "timestamp": 0,
+    "source": None  # Track which API succeeded
 }
 CACHE_DURATION = 3600  # 1 hour in seconds
 
@@ -65,26 +68,24 @@ def get_realtime_fx_rates():
     # Check cache first
     current_time = time.time()
     if FX_CACHE["rates"] and (current_time - FX_CACHE["timestamp"]) < CACHE_DURATION:
-        print(f"Using cached FX rates from {FX_CACHE['timestamp']}")
-        return FX_CACHE["rates"]
+        print(f"Using cached FX rates from {FX_CACHE['source']}")
+        return FX_CACHE["rates"], FX_CACHE["source"]
     
     fx_rates = None
+    source_used = None
     
     # Try multiple APIs in order of reliability
     api_endpoints = [
-        # API 1: exchangerate.host (base=SGD)
-        {
-            "name": "exchangerate.host",
-            "url": "https://api.exchangerate.host/latest?base=SGD",
-            "key": "rates"
-        },
-        # API 2: open.er-api.com (base=SGD) - more reliable
         {
             "name": "open.er-api.com",
             "url": "https://open.er-api.com/v6/latest/SGD",
             "key": "rates"
         },
-        # API 3: frankfurter.app (free, no API key)
+        {
+            "name": "exchangerate.host",
+            "url": "https://api.exchangerate.host/latest?base=SGD",
+            "key": "rates"
+        },
         {
             "name": "frankfurter.app",
             "url": "https://api.frankfurter.app/latest?from=SGD",
@@ -115,7 +116,7 @@ def get_realtime_fx_rates():
                 print(f"{api['name']} missing required currencies")
                 continue
             
-            # Convert to our format (base is SGD, so rates are already correct)
+            # Convert to our format
             fx_rates = {
                 "SGD": 1.0,
                 "USD": float(raw_rates["USD"]),
@@ -125,40 +126,38 @@ def get_realtime_fx_rates():
                 "GBP": float(raw_rates["GBP"])
             }
             
-            print(f"✓ Got FX rates from {api['name']}: {fx_rates}")
+            source_used = api["name"]
+            print(f"✓ Got FX rates from {source_used}: {fx_rates}")
             break
             
         except Exception as e:
             print(f"{api['name']} error: {e}")
             continue
     
-    # If all APIs fail, raise an error instead of using hardcoded rates
+    # If all APIs fail
     if not fx_rates:
-        error_msg = "CRITICAL: All FX APIs failed! Cannot get real-time rates."
+        error_msg = "CRITICAL: All FX APIs failed!"
         print(error_msg)
-        # Return None instead of hardcoded - this will cause the app to fail visibly
-        # Uncomment below to raise error instead:
-        # raise Exception(error_msg)
-        # For now, return minimal rates to prevent crash (but log warning)
         return {
             "SGD": 1.0,
-            "USD": None,  # Will cause calculation to fail if used
+            "USD": None,
             "INR": None,
             "AUD": None,
             "EUR": None,
             "GBP": None
-        }
+        }, "ERROR: All APIs failed"
     
-    # Cache the rates
+    # Cache the rates WITH source
     FX_CACHE["rates"] = fx_rates
     FX_CACHE["timestamp"] = current_time
+    FX_CACHE["source"] = source_used
     
-    return fx_rates
+    return fx_rates, source_used
 
 
-# Initialize FX rates on startup (NO HARDCODED)
-FX = get_realtime_fx_rates()
-print(f"Initial FX rates: {FX}")
+# Initialize on startup
+FX, FX_SOURCE = get_realtime_fx_rates()
+print(f"Initial FX rates from {FX_SOURCE}: {FX}")
 
 VALID_CURRENCIES = set(FX.keys())
 
@@ -173,7 +172,8 @@ def root():
         "status": "running",
         "message": "Portfolio backend active",
         "fx_rates": FX,
-        "fx_source": "Real-time from external API (NO hardcoded rates)"
+        "fx_source": FX_SOURCE,
+        "fx_cached": (time.time() - FX_CACHE["timestamp"]) < CACHE_DURATION
     }
 
 
@@ -183,15 +183,22 @@ def root():
 
 @app.get("/fx-rates")
 def get_fx_rates():
-    """Get current FX rates"""
+    """Get current FX rates with API source"""
+    global FX, FX_SOURCE
     # Force refresh
-    global FX
-    FX = get_realtime_fx_rates()
+    FX, FX_SOURCE = get_realtime_fx_rates()
+    
     return {
         "rates": FX,
         "base": "SGD",
-        "source": "Real-time from external API",
-        "cached": (time.time() - FX_CACHE["timestamp"]) < CACHE_DURATION
+        "source": FX_SOURCE,  # ✅ Shows which API was used
+        "cached": (time.time() - FX_CACHE["timestamp"]) < CACHE_DURATION,
+        "last_updated": FX_CACHE["timestamp"],
+        "api_endpoint_tested": [
+            "open.er-api.com (primary)",
+            "exchangerate.host (backup)",
+            "frankfurter.app (backup)"
+        ]
     }
 
 
@@ -202,15 +209,15 @@ def get_fx_rates():
 @app.get("/refresh-fx")
 def refresh_fx_rates():
     """Force refresh FX rates"""
-    global FX, FX_CACHE
+    global FX, FX_SOURCE, FX_CACHE
     FX_CACHE["timestamp"] = 0  # Invalidate cache
-    FX = get_realtime_fx_rates()
+    FX, FX_SOURCE = get_realtime_fx_rates()
     return {
         "status": "success",
         "rates": FX,
-        "message": "FX rates refreshed from external API"
+        "source": FX_SOURCE,  # ✅ Shows which API succeeded
+        "message": f"FX rates refreshed from {FX_SOURCE}"
     }
-
 
 # =====================================================
 # HELPERS
