@@ -14,7 +14,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"]
-)    
+)
 
 # =====================================================
 # AUTH
@@ -120,8 +120,9 @@ def get_sheet(name):
     ws = sheet.worksheet(name)
     return pd.DataFrame(ws.get_all_records())
 
+
 # =====================================================
-# NORMALIZE
+# NORMALIZE FUNCTIONS
 # =====================================================
 
 def normalize_cash(df):
@@ -136,4 +137,265 @@ def normalize_cash(df):
         rows.append({
             "asset": asset,
             "sub_type": "Cash",
-            "currency": 
+            "currency": "SGD",
+            "qty": 1,
+            "current_price": value,
+            "investment_price": value,
+            "market_value": value,
+            "investment_value": value
+        })
+    return rows
+
+
+def normalize_mf(df):
+    rows = []
+    for _, r in df.iterrows():
+        asset = str(r["MF - SK"]).strip()
+        if invalid_asset(asset):
+            continue
+        currency = clean_currency(r.get(" Currency "))
+        if currency is None:
+            continue
+        rows.append({
+            "asset": asset,
+            "sub_type": "Mutual Fund",
+            "currency": currency,
+            "qty": safe_float(r.get("Qty", 0)),
+            "current_price": 0,
+            "investment_price": 0,
+            "market_value": safe_float(r["Current Value"]),
+            "investment_value": safe_float(r["Invested Amount"])
+        })
+    return rows
+
+
+def normalize_shares(df):
+    rows = []
+    for _, r in df.iterrows():
+        asset = str(r["Company"]).strip()
+        if invalid_asset(asset):
+            continue
+        currency = clean_currency(r.get(" Currency "))
+        if currency is None:
+            continue
+        subtype = "ETF" if "ETF" in asset.upper() else "Stock"
+        rows.append({
+            "asset": asset,
+            "sub_type": subtype,
+            "currency": currency,
+            "qty": safe_float(r.get("Qty", 0)),
+            "current_price": safe_float(r.get("Current Price", 0)),
+            "investment_price": safe_float(r.get("Investment Price", 0)),
+            "market_value": safe_float(r.get("Current Market Value")),
+            "investment_value": safe_float(r.get("Investment Value"))
+        })
+    return rows
+
+
+def normalize_gold(df):
+    rows = []
+    for _, r in df.iterrows():
+        asset = str(r["Company"]).strip()
+        if invalid_asset(asset):
+            continue
+        currency = clean_currency(r.get(" Currency "))
+        if currency is None:
+            continue
+        rows.append({
+            "asset": asset,
+            "sub_type": "Gold",
+            "currency": currency,
+            "qty": safe_float(r.get("Qty", 0)),
+            "current_price": safe_float(r.get("Current Price", 0)),
+            "investment_price": safe_float(r.get("Investment Price", 0)),
+            "market_value": safe_float(r["Current Market Value"]),
+            "investment_value": safe_float(r["Investment Value"])
+        })
+    return rows
+
+
+# =====================================================
+# BUILD DF
+# =====================================================
+
+def build_df():
+    holdings = []
+    holdings += normalize_cash(get_sheet("Cash"))
+    holdings += normalize_mf(get_sheet("MFs"))
+    holdings += normalize_shares(get_sheet("Shares"))
+    holdings += normalize_gold(get_sheet("Gold"))
+
+    df = pd.DataFrame(holdings)
+
+    if df.empty:
+        return df
+
+    df["fx"] = df["currency"].map(FX)
+    df["value_sgd"] = df["market_value"] * df["fx"]
+    df["investment_sgd"] = df["investment_value"] * df["fx"]
+    df["profit_sgd"] = df["value_sgd"] - df["investment_sgd"]
+    df["profit_pct"] = (
+        (df["market_value"] - df["investment_value"])
+        / df["investment_value"].replace(0, 1)
+        * 100
+    )
+
+    return df
+
+
+# =====================================================
+# PORTFOLIO ENDPOINT
+# =====================================================
+
+@app.get("/portfolio")
+def portfolio():
+    df = build_df()
+    total = df["value_sgd"].sum()
+
+    allocation = (
+        df.groupby("sub_type")["value_sgd"].sum()
+        / total * 100
+    )
+
+    currency = (
+        df.groupby("currency")["value_sgd"].sum()
+        / total * 100
+    )
+
+    top = df.sort_values("value_sgd", ascending=False).head(10)
+
+    asset_class_breakdown = []
+    grouped = df.groupby("sub_type").agg({
+        "investment_sgd": "sum",
+        "value_sgd": "sum",
+        "profit_sgd": "sum"
+    })
+
+    for asset_class, row in grouped.iterrows():
+        holdings = df[df["sub_type"] == asset_class].copy()
+        holdings["portfolio_pct"] = holdings["value_sgd"] / total * 100
+        holdings["unrealised_gain"] = holdings["market_value"] - holdings["investment_value"]
+        holdings["unrealised_gain_pct"] = (
+            holdings["unrealised_gain"]
+            / holdings["investment_value"].replace(0, 1)
+            * 100
+        )
+
+        asset_class_breakdown.append({
+            "asset_class": asset_class,
+            "investment_sgd": round(row["investment_sgd"], 2),
+            "value_sgd": round(row["value_sgd"], 2),
+            "profit_sgd": round(row["profit_sgd"], 2),
+            "profit_pct": round(row["profit_sgd"] / max(row["investment_sgd"], 1) * 100, 2),
+            "portfolio_pct": round(row["value_sgd"] / total * 100, 2),
+            "holdings": holdings.round(2).to_dict(orient="records")
+        })
+
+    return {
+        "summary": {
+            "networth_sgd": round(total, 2),
+            "profit_sgd": round(df["profit_sgd"].sum(), 2)
+        },
+        "allocation": allocation.round(2).to_dict(),
+        "currency_exposure": currency.round(2).to_dict(),
+        "top_holdings": top[["asset", "value_sgd"]].round(2).to_dict(orient="records"),
+        "asset_class_breakdown": asset_class_breakdown,
+        "holdings": df.round(2).to_dict(orient="records")
+    }
+
+
+# =====================================================
+# HOLDINGS ENDPOINT (FIXED - adds missing calculations)
+# =====================================================
+
+@app.get("/holdings/{asset_class}")
+def holdings(asset_class: str):
+    df = build_df()
+    filtered = df[df["sub_type"] == asset_class].copy()
+    
+    total = df["value_sgd"].sum()
+    
+    # Add the missing calculated fields
+    filtered["portfolio_pct"] = filtered["value_sgd"] / total * 100
+    filtered["unrealised_gain"] = filtered["market_value"] - filtered["investment_value"]
+    filtered["unrealised_gain_pct"] = (
+        filtered["unrealised_gain"]
+        / filtered["investment_value"].replace(0, 1)
+        * 100
+    )
+    
+    return filtered.round(2).to_dict(orient="records")
+
+
+# =====================================================
+# ANALYTICS ENDPOINT
+# =====================================================
+
+@app.get("/analytics")
+def analytics():
+    df = build_df()
+    total = df["value_sgd"].sum()
+    
+    if total == 0:
+        return {
+            "country_exposure": {},
+            "concentration": {
+                "largest_holding_pct": 0,
+                "top5_pct": 0,
+                "top10_pct": 0
+            },
+            "diversification": {
+                "score": 0,
+                "hhi": 0
+            },
+            "risk_signals": []
+        }
+    
+    country_map = {
+        "USD": "US",
+        "INR": "India",
+        "SGD": "Singapore",
+        "AUD": "Australia",
+        "GBP": "UK",
+        "EUR": "Europe"
+    }
+    
+    df["country"] = df["currency"].map(country_map)
+    country = df.groupby("country")["value_sgd"].sum() / total * 100
+    
+    weights = df["value_sgd"] / total
+    largest = weights.max() * 100
+    top5 = weights.nlargest(5).sum() * 100
+    top10 = weights.nlargest(10).sum() * 100
+    hhi = (weights.pow(2).sum()) * 10000
+    
+    score = 100
+    score -= max(0, (largest - 8) * 1.5)
+    score -= max(0, (top5 - 30) * 0.8)
+    score -= max(0, (top10 - 50) * 0.5)
+    score -= max(0, (hhi - 200) / 20)
+    score = max(min(score, 100), 0)
+    
+    risks = []
+    if largest > 12:
+        risks.append("High single stock concentration")
+    if top5 > 40:
+        risks.append("Moderate portfolio concentration")
+    if country.get("US", 0) > 50:
+        risks.append("High USD exposure")
+    if hhi > 600:
+        risks.append("Low diversification")
+    
+    return {
+        "country_exposure": country.round(2).to_dict(),
+        "concentration": {
+            "largest_holding_pct": round(largest, 2),
+            "top5_pct": round(top5, 2),
+            "top10_pct": round(top10, 2)
+        },
+        "diversification": {
+            "score": round(score, 2),
+            "hhi": round(hhi, 2)
+        },
+        "risk_signals": risks
+    }
