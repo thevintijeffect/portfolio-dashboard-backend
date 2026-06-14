@@ -382,14 +382,17 @@ def build_df():
     if df.empty:
         return df
 
-    # Use real-time FX rates (NO HARDCODED)
+    # Use real-time FX rates
+    # API returns: 1 SGD = X foreign currency (e.g., USD: 1.28)
+    # To convert foreign TO SGD: DIVIDE by the rate
     df["fx"] = df["currency"].map(FX)
     
     # Handle None values (if FX API failed)
     df["fx"] = df["fx"].replace([None], 1.0)
     
-    df["value_sgd"] = df["market_value"] * df["fx"]
-    df["investment_sgd"] = df["investment_value"] * df["fx"]
+    # FIX: DIVIDE instead of multiply
+    df["value_sgd"] = df["market_value"] / df["fx"]
+    df["investment_sgd"] = df["investment_value"] / df["fx"]
     df["profit_sgd"] = df["value_sgd"] - df["investment_sgd"]
     df["profit_pct"] = (
         (df["market_value"] - df["investment_value"])
