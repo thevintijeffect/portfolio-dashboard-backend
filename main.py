@@ -1,5 +1,6 @@
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 import gspread
 from google.oauth2.service_account import Credentials
 import pandas as pd
@@ -7,6 +8,7 @@ import os
 import json
 import requests
 import time
+import traceback
 
 app = FastAPI()
 
@@ -17,6 +19,17 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"]
 )
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": str(exc),
+            "type": exc.__class__.__name__,
+            "traceback": traceback.format_exc().splitlines()
+        }
+    )
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
 
@@ -134,11 +147,7 @@ def get_realtime_fx_rates():
 FX, FX_SOURCE = get_realtime_fx_rates()
 
 def parse_cash_sheet():
-    try:
-        raw = get_sheet_values("Cash")
-    except Exception:
-        return []
-
+    raw = get_sheet_values("Cash")
     if not raw:
         return []
 
@@ -179,7 +188,8 @@ def parse_cash_sheet():
         if is_total_row(first):
             continue
 
-        if first.lower() in {"current value", "investment value", "appreciation", "appreciation %", "sgd amount"}:
+        lower_first = first.lower()
+        if lower_first in {"current value", "investment value", "appreciation", "appreciation %", "sgd amount"}:
             continue
 
         if invalid_asset(first):
@@ -188,18 +198,15 @@ def parse_cash_sheet():
         market_value = 0
         investment_value = 0
 
-        try:
-            if current_group == "MM Funds":
-                market_value = safe_float(cells[1]) if len(cells) > 1 else 0
-                investment_value = safe_float(cells[2]) if len(cells) > 2 else 0
-            elif current_group == "SG Account balances":
-                market_value = safe_float(cells[1]) if len(cells) > 1 else 0
-                investment_value = market_value
-            elif current_group == "Foreign Cash Accounts":
-                market_value = safe_float(cells[2]) if len(cells) > 2 else 0
-                investment_value = safe_float(cells[3]) if len(cells) > 3 else 0
-        except Exception:
-            continue
+        if current_group == "MM Funds":
+            market_value = safe_float(cells[1]) if len(cells) > 1 else 0
+            investment_value = safe_float(cells[2]) if len(cells) > 2 else 0
+        elif current_group == "SG Account balances":
+            market_value = safe_float(cells[1]) if len(cells) > 1 else 0
+            investment_value = market_value
+        elif current_group == "Foreign Cash Accounts":
+            market_value = safe_float(cells[2]) if len(cells) > 2 else 0
+            investment_value = safe_float(cells[3]) if len(cells) > 3 else 0
 
         if market_value <= 0 and investment_value <= 0:
             continue
@@ -386,12 +393,16 @@ def build_cash_groups(df):
         }
     }
 
+@app.get("/debug/cash")
+def debug_cash():
+    try:
+        raw = get_sheet_values("Cash")
+        return {"rows": raw[:50], "count": len(raw)}
+    except Exception as e:
+        return {"error": str(e), "type": e.__class__.__name__}
+
 @app.get("/portfolio")
 def portfolio():
-    cached = cache_get("portfolio", CACHE_TTL["portfolio"])
-    if cached is not None:
-        return cached
-
     df = build_df()
     total = df["value_sgd"].sum() if not df.empty else 0
 
@@ -446,19 +457,12 @@ def portfolio():
 
 @app.get("/holdings/{asset_class}")
 def holdings(asset_class: str):
-    cache_key = f"holdings:{asset_class}"
-    cached = cache_get(cache_key, CACHE_TTL["holdings"])
-    if cached is not None:
-        return cached
-
     df = build_df()
     if df.empty:
         return []
 
     if asset_class == "Cash":
-        result = build_cash_groups(df)
-        cache_set(cache_key, result)
-        return result
+        return build_cash_groups(df)
 
     filtered = df[df["sub_type"] == asset_class].copy()
     total = df["value_sgd"].sum()
@@ -472,55 +476,30 @@ def holdings(asset_class: str):
             * 100
         )
 
-    result = filtered.round(2).to_dict(orient="records")
-    cache_set(cache_key, result)
-    return result
+    return filtered.round(2).to_dict(orient="records")
 
 @app.get("/analytics")
 def analytics():
-    cached = cache_get("analytics", CACHE_TTL["analytics"])
-    if cached is not None:
-        return cached
-
     df = build_df()
 
     if df.empty:
-        result = {
+        return {
             "country_exposure": {},
-            "concentration": {
-                "largest_holding_pct": 0,
-                "top5_pct": 0,
-                "top10_pct": 0
-            },
-            "diversification": {
-                "score": 0,
-                "hhi": 0
-            },
+            "concentration": {"largest_holding_pct": 0, "top5_pct": 0, "top10_pct": 0},
+            "diversification": {"score": 0, "hhi": 0},
             "risk_signals": [],
             "fx_rates": FX
         }
-        cache_set("analytics", result)
-        return result
 
     total = df["value_sgd"].sum()
-
     if total == 0:
-        result = {
+        return {
             "country_exposure": {},
-            "concentration": {
-                "largest_holding_pct": 0,
-                "top5_pct": 0,
-                "top10_pct": 0
-            },
-            "diversification": {
-                "score": 0,
-                "hhi": 0
-            },
+            "concentration": {"largest_holding_pct": 0, "top5_pct": 0, "top10_pct": 0},
+            "diversification": {"score": 0, "hhi": 0},
             "risk_signals": [],
             "fx_rates": FX
         }
-        cache_set("analytics", result)
-        return result
 
     country_map = {
         "USD": "US",
@@ -557,7 +536,7 @@ def analytics():
     if hhi > 600:
         risks.append("Low diversification")
 
-    result = {
+    return {
         "country_exposure": country.round(2).to_dict(),
         "concentration": {
             "largest_holding_pct": round(largest, 2),
@@ -571,6 +550,3 @@ def analytics():
         "risk_signals": risks,
         "fx_rates": FX
     }
-
-    cache_set("analytics", result)
-    return result
