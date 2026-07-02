@@ -147,7 +147,11 @@ def get_realtime_fx_rates():
 FX, FX_SOURCE = get_realtime_fx_rates()
 
 def parse_cash_sheet():
-    raw = get_sheet_values("Cash")
+    try:
+        raw = get_sheet_values("Cash")
+    except Exception:
+        return []
+
     if not raw:
         return []
 
@@ -155,16 +159,24 @@ def parse_cash_sheet():
     current_group = None
 
     def is_section_header(text):
-        t = str(text).strip().lower()
-        return (
-            t == "mm funds"
-            or t == "sg account balances"
-            or t == "foreign cash accounts"
-        )
+        t = str(text).strip()
+        return t in {"MM Funds", "SG Account balances", "Foreign Cash Accounts"}
 
     def is_total_row(text):
         t = str(text).strip().lower()
-        return t.startswith("total bal in sgd") or t.startswith("total")
+        return t.startswith("total bal in sgd") or t.startswith("total cash") or t == "total"
+
+    def is_subheader(text):
+        t = str(text).strip().lower()
+        return t in {
+            "mm funds name",
+            "account name",
+            "current value",
+            "investment value",
+            "appreciation",
+            "appreciation %",
+            "sgd amount"
+        }
 
     for row in raw:
         cells = [str(c).strip() if c is not None else "" for c in row]
@@ -174,29 +186,21 @@ def parse_cash_sheet():
         first = cells[0]
 
         if is_section_header(first):
-            if first.lower() == "sg account balances":
-                current_group = "SG Account balances"
-            elif first.lower() == "mm funds":
-                current_group = "MM Funds"
-            else:
-                current_group = "Foreign Cash Accounts"
+            current_group = first
+            continue
+
+        if first == "Debt to Receive":
+            current_group = None
             continue
 
         if current_group is None:
             continue
 
-        if is_total_row(first):
-            continue
-
-        lower_first = first.lower()
-        if lower_first in {"current value", "investment value", "appreciation", "appreciation %", "sgd amount"}:
+        if is_total_row(first) or is_subheader(first):
             continue
 
         if invalid_asset(first):
             continue
-
-        market_value = 0
-        investment_value = 0
 
         if current_group == "MM Funds":
             market_value = safe_float(cells[1]) if len(cells) > 1 else 0
@@ -206,7 +210,9 @@ def parse_cash_sheet():
             investment_value = market_value
         elif current_group == "Foreign Cash Accounts":
             market_value = safe_float(cells[2]) if len(cells) > 2 else 0
-            investment_value = safe_float(cells[3]) if len(cells) > 3 else 0
+            investment_value = safe_float(cells[3]) if len(cells) > 3 and cells[3] else 0
+        else:
+            continue
 
         if market_value <= 0 and investment_value <= 0:
             continue
@@ -298,25 +304,18 @@ def build_df():
         return cached
 
     holdings = []
-    try:
-        holdings += parse_cash_sheet()
-    except Exception:
-        holdings += []
 
-    try:
-        holdings += normalize_mf(get_sheet_df("MFs"))
-    except Exception:
-        holdings += []
+    for fn in [parse_cash_sheet]:
+        try:
+            holdings += fn()
+        except Exception:
+            holdings += []
 
-    try:
-        holdings += normalize_shares(get_sheet_df("Shares"))
-    except Exception:
-        holdings += []
-
-    try:
-        holdings += normalize_gold(get_sheet_df("Gold"))
-    except Exception:
-        holdings += []
+    for sheet_name, fn in [("MFs", normalize_mf), ("Shares", normalize_shares), ("Gold", normalize_gold)]:
+        try:
+            holdings += fn(get_sheet_df(sheet_name))
+        except Exception:
+            holdings += []
 
     df = pd.DataFrame(holdings)
     if df.empty:
@@ -327,11 +326,7 @@ def build_df():
     df["value_sgd"] = df["market_value"] / df["fx"]
     df["investment_sgd"] = df["investment_value"] / df["fx"]
     df["profit_sgd"] = df["value_sgd"] - df["investment_sgd"]
-    df["profit_pct"] = (
-        (df["market_value"] - df["investment_value"])
-        / df["investment_value"].replace(0, 1)
-        * 100
-    )
+    df["profit_pct"] = ((df["market_value"] - df["investment_value"]) / df["investment_value"].replace(0, 1) * 100)
 
     cache_set("df", df)
     return df
