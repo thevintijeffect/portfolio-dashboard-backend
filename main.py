@@ -25,18 +25,9 @@ credentials = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
 client = gspread.authorize(credentials)
 sheet = client.open_by_key("1A9vTee-Jfg8lgLx18-942VuBHkQnrzqI3n2uQOCwOyA")
 
-FX_CACHE = {
-    "rates": None,
-    "timestamp": 0,
-    "source": None
-}
+FX_CACHE = {"rates": None, "timestamp": 0, "source": None}
 DATA_CACHE = {}
-CACHE_TTL = {
-    "df": 45,
-    "portfolio": 30,
-    "analytics": 30,
-    "holdings": 30
-}
+CACHE_TTL = {"df": 45, "portfolio": 30, "analytics": 30, "holdings": 30}
 FX_TTL = 3600
 
 CASH_SECTION_TITLES = [
@@ -44,6 +35,8 @@ CASH_SECTION_TITLES = [
     "SG Account balances",
     "Foreign Cash Accounts"
 ]
+
+VALID_CURRENCIES = {"SGD", "USD", "INR", "AUD", "EUR", "GBP"}
 
 def now():
     return time.time()
@@ -65,7 +58,9 @@ def safe_float(x):
         if x is None:
             return 0
         x = str(x).strip().replace(",", "")
-        return float(x) if x else 0
+        if x == "":
+            return 0
+        return float(x)
     except:
         return 0
 
@@ -73,7 +68,7 @@ def clean_currency(x):
     if x is None:
         return None
     x = str(x).strip().upper()
-    return x if x in {"SGD", "USD", "INR", "AUD", "EUR", "GBP"} else None
+    return x if x in VALID_CURRENCIES else None
 
 def invalid_asset(asset):
     if asset is None:
@@ -92,13 +87,12 @@ def get_sheet_df(name):
 
 def get_realtime_fx_rates():
     global FX_CACHE
-    current_time = now()
-    if FX_CACHE["rates"] and (current_time - FX_CACHE["timestamp"]) < FX_TTL:
+    t = now()
+    if FX_CACHE["rates"] and (t - FX_CACHE["timestamp"]) < FX_TTL:
         return FX_CACHE["rates"], FX_CACHE["source"]
 
     fx_rates = None
     source_used = None
-
     api_endpoints = [
         {"name": "open.er-api.com", "url": "https://open.er-api.com/v6/latest/SGD", "key": "rates"},
         {"name": "exchangerate.host", "url": "https://api.exchangerate.host/latest?base=SGD", "key": "rates"},
@@ -107,21 +101,21 @@ def get_realtime_fx_rates():
 
     for api in api_endpoints:
         try:
-            response = requests.get(api["url"], timeout=10)
-            if response.status_code != 200:
+            r = requests.get(api["url"], timeout=8)
+            if r.status_code != 200:
                 continue
-            data = response.json()
-            raw_rates = data.get(api["key"])
+            data = r.json()
+            raw = data.get(api["key"])
             required = ["USD", "INR", "AUD", "EUR", "GBP"]
-            if not raw_rates or not all(c in raw_rates for c in required):
+            if not raw or not all(c in raw for c in required):
                 continue
             fx_rates = {
                 "SGD": 1.0,
-                "USD": float(raw_rates["USD"]),
-                "INR": float(raw_rates["INR"]),
-                "AUD": float(raw_rates["AUD"]),
-                "EUR": float(raw_rates["EUR"]),
-                "GBP": float(raw_rates["GBP"]),
+                "USD": float(raw["USD"]),
+                "INR": float(raw["INR"]),
+                "AUD": float(raw["AUD"]),
+                "EUR": float(raw["EUR"]),
+                "GBP": float(raw["GBP"]),
             }
             source_used = api["name"]
             break
@@ -129,40 +123,39 @@ def get_realtime_fx_rates():
             continue
 
     if not fx_rates:
-        fx_rates = {
-            "SGD": 1.0,
-            "USD": None,
-            "INR": None,
-            "AUD": None,
-            "EUR": None,
-            "GBP": None
-        }
+        fx_rates = {"SGD": 1.0, "USD": None, "INR": None, "AUD": None, "EUR": None, "GBP": None}
         source_used = "ERROR: All APIs failed"
 
     FX_CACHE["rates"] = fx_rates
-    FX_CACHE["timestamp"] = current_time
+    FX_CACHE["timestamp"] = t
     FX_CACHE["source"] = source_used
     return fx_rates, source_used
 
 FX, FX_SOURCE = get_realtime_fx_rates()
 
 def parse_cash_sheet():
-    raw = get_sheet_values("Cash")
+    try:
+        raw = get_sheet_values("Cash")
+    except Exception:
+        return []
+
     if not raw:
         return []
 
-    sections = []
-    current_section = None
-    current_rows = []
+    parsed = []
+    current_group = None
 
-    def flush_section():
-        nonlocal current_section, current_rows
-        if current_section and current_rows:
-            sections.append({
-                "group_name": current_section,
-                "rows": current_rows
-            })
-        current_rows = []
+    def is_section_header(text):
+        t = str(text).strip().lower()
+        return (
+            t == "mm funds"
+            or t == "sg account balances"
+            or t == "foreign cash accounts"
+        )
+
+    def is_total_row(text):
+        t = str(text).strip().lower()
+        return t.startswith("total bal in sgd") or t.startswith("total")
 
     for row in raw:
         cells = [str(c).strip() if c is not None else "" for c in row]
@@ -170,85 +163,65 @@ def parse_cash_sheet():
             continue
 
         first = cells[0]
-        lower_first = first.lower()
 
-        if first in CASH_SECTION_TITLES:
-            flush_section()
-            current_section = first
+        if is_section_header(first):
+            if first.lower() == "sg account balances":
+                current_group = "SG Account balances"
+            elif first.lower() == "mm funds":
+                current_group = "MM Funds"
+            else:
+                current_group = "Foreign Cash Accounts"
             continue
 
-        if current_section is None:
+        if current_group is None:
             continue
 
-        if lower_first.startswith("total bal in sgd"):
+        if is_total_row(first):
             continue
 
-        if "current value" in lower_first or "investment value" in lower_first or "appreciation" in lower_first:
+        if first.lower() in {"current value", "investment value", "appreciation", "appreciation %", "sgd amount"}:
             continue
 
-        current_rows.append(cells)
+        if invalid_asset(first):
+            continue
 
-    flush_section()
+        market_value = 0
+        investment_value = 0
 
-    parsed = []
-    for section in sections:
-        group = section["group_name"]
-        rows = section["rows"]
-
-        for cells in rows:
-            if not cells or invalid_asset(cells[0]):
-                continue
-
-            asset = cells[0]
-            currency = "SGD"
-            qty = 1
-            current_price = 0
-            investment_price = 0
-            market_value = 0
-            investment_value = 0
-
-            if group == "MM Funds":
+        try:
+            if current_group == "MM Funds":
                 market_value = safe_float(cells[1]) if len(cells) > 1 else 0
                 investment_value = safe_float(cells[2]) if len(cells) > 2 else 0
-                current_price = market_value
-                investment_price = investment_value
-                currency = "SGD"
-
-            elif group == "SG Account balances":
+            elif current_group == "SG Account balances":
                 market_value = safe_float(cells[1]) if len(cells) > 1 else 0
                 investment_value = market_value
-                current_price = market_value
-                investment_price = market_value
-                currency = "SGD"
-
-            elif group == "Foreign Cash Accounts":
+            elif current_group == "Foreign Cash Accounts":
                 market_value = safe_float(cells[2]) if len(cells) > 2 else 0
                 investment_value = safe_float(cells[3]) if len(cells) > 3 else 0
-                current_price = market_value
-                investment_price = investment_value
-                currency = "SGD"
+        except Exception:
+            continue
 
-            if market_value <= 0 and investment_value <= 0:
-                continue
+        if market_value <= 0 and investment_value <= 0:
+            continue
 
-            parsed.append({
-                "asset": asset,
-                "sub_type": "Cash",
-                "cash_group": group,
-                "currency": currency,
-                "qty": qty,
-                "current_price": current_price,
-                "investment_price": investment_price,
-                "market_value": market_value,
-                "investment_value": investment_value
-            })
+        parsed.append({
+            "asset": first,
+            "sub_type": "Cash",
+            "cash_group": current_group,
+            "currency": "SGD",
+            "qty": 1,
+            "current_price": market_value,
+            "investment_price": investment_value,
+            "market_value": market_value,
+            "investment_value": investment_value
+        })
 
     return parsed
 
 def normalize_mf(df):
     rows = []
     for _, r in df.iterrows():
-        asset = str(r["MF - SK"]).strip()
+        asset = str(r.get("MF - SK", "")).strip()
         if invalid_asset(asset):
             continue
         currency = clean_currency(r.get(" Currency "))
@@ -262,15 +235,15 @@ def normalize_mf(df):
             "qty": safe_float(r.get("Qty", 0)),
             "current_price": 0,
             "investment_price": 0,
-            "market_value": safe_float(r["Current Value"]),
-            "investment_value": safe_float(r["Invested Amount"])
+            "market_value": safe_float(r.get("Current Value")),
+            "investment_value": safe_float(r.get("Invested Amount"))
         })
     return rows
 
 def normalize_shares(df):
     rows = []
     for _, r in df.iterrows():
-        asset = str(r["Company"]).strip()
+        asset = str(r.get("Company", "")).strip()
         if invalid_asset(asset):
             continue
         currency = clean_currency(r.get(" Currency "))
@@ -293,7 +266,7 @@ def normalize_shares(df):
 def normalize_gold(df):
     rows = []
     for _, r in df.iterrows():
-        asset = str(r["Company"]).strip()
+        asset = str(r.get("Company", "")).strip()
         if invalid_asset(asset):
             continue
         currency = clean_currency(r.get(" Currency "))
@@ -318,10 +291,25 @@ def build_df():
         return cached
 
     holdings = []
-    holdings += parse_cash_sheet()
-    holdings += normalize_mf(get_sheet_df("MFs"))
-    holdings += normalize_shares(get_sheet_df("Shares"))
-    holdings += normalize_gold(get_sheet_df("Gold"))
+    try:
+        holdings += parse_cash_sheet()
+    except Exception:
+        holdings += []
+
+    try:
+        holdings += normalize_mf(get_sheet_df("MFs"))
+    except Exception:
+        holdings += []
+
+    try:
+        holdings += normalize_shares(get_sheet_df("Shares"))
+    except Exception:
+        holdings += []
+
+    try:
+        holdings += normalize_gold(get_sheet_df("Gold"))
+    except Exception:
+        holdings += []
 
     df = pd.DataFrame(holdings)
     if df.empty:
@@ -337,6 +325,7 @@ def build_df():
         / df["investment_value"].replace(0, 1)
         * 100
     )
+
     cache_set("df", df)
     return df
 
@@ -406,16 +395,10 @@ def portfolio():
     df = build_df()
     total = df["value_sgd"].sum() if not df.empty else 0
 
-    allocation = (
-        df.groupby("sub_type")["value_sgd"].sum() / total * 100
-    ) if total > 0 else pd.Series(dtype=float)
-
-    currency = (
-        df.groupby("currency")["value_sgd"].sum() / total * 100
-    ) if total > 0 else pd.Series(dtype=float)
+    allocation = (df.groupby("sub_type")["value_sgd"].sum() / total * 100) if total > 0 else pd.Series(dtype=float)
+    currency = (df.groupby("currency")["value_sgd"].sum() / total * 100) if total > 0 else pd.Series(dtype=float)
 
     asset_class_breakdown = []
-
     if total > 0:
         grouped = df.groupby("sub_type").agg({
             "investment_sgd": "sum",
