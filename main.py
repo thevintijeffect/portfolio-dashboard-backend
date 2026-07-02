@@ -27,13 +27,14 @@ sheet = client.open_by_key("1A9vTee-Jfg8lgLx18-942VuBHkQnrzqI3n2uQOCwOyA")
 
 FX_CACHE = {"rates": None, "timestamp": 0, "source": None}
 DATA_CACHE = {}
-CACHE_TTL = {
-    "df": 45,
-    "portfolio": 30,
-    "analytics": 30,
-    "holdings": 30
-}
+CACHE_TTL = {"df": 45, "portfolio": 30, "analytics": 30, "holdings": 30}
 FX_TTL = 3600
+
+CASH_HEADERS = [
+    "MM Funds",
+    "SG Account Balances",
+    "Foreign Cash Account"
+]
 
 def now():
     return time.time()
@@ -68,11 +69,11 @@ def clean_currency(x):
 def invalid_asset(asset):
     if asset is None:
         return True
-    text = str(asset).upper()
+    text = str(asset).upper().strip()
     bad = ["TOTAL", "BALANCE", "ACCOUNT", "ACCOUNTS", "GAIN", "LOSS", "REALISED", "UNREALISED", "CURRENCY"]
     return text == "" or any(k in text for k in bad)
 
-def get_sheet(name):
+def get_sheet_df(name):
     ws = sheet.worksheet(name)
     return pd.DataFrame(ws.get_all_records())
 
@@ -124,25 +125,55 @@ def get_realtime_fx_rates():
 
 FX, FX_SOURCE = get_realtime_fx_rates()
 
-def normalize_cash(df):
+def parse_cash_sheet():
+    ws = sheet.worksheet("Cash")
+    raw = ws.get_all_values()
+    if not raw:
+        return []
+
     rows = []
-    for _, r in df.iterrows():
-        asset = str(r["MM Funds name"]).strip()
-        if invalid_asset(asset):
+    current_group = None
+
+    for row in raw:
+        first = str(row[0]).strip() if len(row) > 0 and row[0] is not None else ""
+        second = str(row[1]).strip() if len(row) > 1 and row[1] is not None else ""
+        third = str(row[2]).strip() if len(row) > 2 and row[2] is not None else ""
+
+        if first in CASH_HEADERS:
+            current_group = first
             continue
-        value = safe_float(r["Current Value"])
-        if value <= 0:
+
+        if current_group is None:
             continue
+
+        if invalid_asset(first):
+            continue
+
+        currency = clean_currency(third) if third else "SGD"
+        if currency is None:
+            currency = "SGD"
+
+        market_value = safe_float(row[3]) if len(row) > 3 else 0
+        investment_value = safe_float(row[4]) if len(row) > 4 else market_value
+        qty = safe_float(row[5]) if len(row) > 5 else 1
+        current_price = safe_float(row[6]) if len(row) > 6 else market_value
+        investment_price = safe_float(row[7]) if len(row) > 7 else investment_value
+
+        if market_value <= 0 and investment_value <= 0:
+            continue
+
         rows.append({
-            "asset": asset,
+            "asset": first,
             "sub_type": "Cash",
-            "currency": "SGD",
-            "qty": 1,
-            "current_price": value,
-            "investment_price": value,
-            "market_value": value,
-            "investment_value": value
+            "cash_group": current_group,
+            "currency": currency,
+            "qty": qty if qty else 1,
+            "current_price": current_price,
+            "investment_price": investment_price,
+            "market_value": market_value if market_value > 0 else investment_value,
+            "investment_value": investment_value if investment_value > 0 else market_value
         })
+
     return rows
 
 def normalize_mf(df):
@@ -157,6 +188,7 @@ def normalize_mf(df):
         rows.append({
             "asset": asset,
             "sub_type": "Mutual Fund",
+            "cash_group": None,
             "currency": currency,
             "qty": safe_float(r.get("Qty", 0)),
             "current_price": 0,
@@ -179,6 +211,7 @@ def normalize_shares(df):
         rows.append({
             "asset": asset,
             "sub_type": subtype,
+            "cash_group": None,
             "currency": currency,
             "qty": safe_float(r.get("Qty", 0)),
             "current_price": safe_float(r.get("Current Price", 0)),
@@ -200,6 +233,7 @@ def normalize_gold(df):
         rows.append({
             "asset": asset,
             "sub_type": "Gold",
+            "cash_group": None,
             "currency": currency,
             "qty": safe_float(r.get("Qty", 0)),
             "current_price": safe_float(r.get("Current Price", 0)),
@@ -215,10 +249,10 @@ def build_df():
         return cached
 
     holdings = []
-    holdings += normalize_cash(get_sheet("Cash"))
-    holdings += normalize_mf(get_sheet("MFs"))
-    holdings += normalize_shares(get_sheet("Shares"))
-    holdings += normalize_gold(get_sheet("Gold"))
+    holdings += parse_cash_sheet()
+    holdings += normalize_mf(get_sheet_df("MFs"))
+    holdings += normalize_shares(get_sheet_df("Shares"))
+    holdings += normalize_gold(get_sheet_df("Gold"))
 
     df = pd.DataFrame(holdings)
     if df.empty:
@@ -230,9 +264,56 @@ def build_df():
     df["investment_sgd"] = df["investment_value"] / df["fx"]
     df["profit_sgd"] = df["value_sgd"] - df["investment_sgd"]
     df["profit_pct"] = (df["market_value"] - df["investment_value"]) / df["investment_value"].replace(0, 1) * 100
-
     cache_set("df", df)
     return df
+
+def cash_group_payload(df):
+    cash_df = df[df["sub_type"] == "Cash"].copy()
+    if cash_df.empty:
+        return {"groups": [], "grand_total": {"market_value": 0, "investment_value": 0, "profit_sgd": 0, "value_sgd": 0}}
+
+    groups = []
+    grand_market = 0
+    grand_invest = 0
+    grand_profit = 0
+    grand_value_sgd = 0
+
+    for group_name in CASH_HEADERS:
+        grp = cash_df[cash_df["cash_group"] == group_name].copy()
+        if grp.empty:
+            continue
+
+        grp["unrealised_gain"] = grp["market_value"] - grp["investment_value"]
+        grp["unrealised_gain_pct"] = grp["unrealised_gain"] / grp["investment_value"].replace(0, 1) * 100
+        grp["portfolio_pct"] = grp["value_sgd"] / max(df["value_sgd"].sum(), 1) * 100
+
+        subtotal = {
+            "market_value": round(grp["market_value"].sum(), 2),
+            "investment_value": round(grp["investment_value"].sum(), 2),
+            "profit_sgd": round(grp["profit_sgd"].sum(), 2),
+            "value_sgd": round(grp["value_sgd"].sum(), 2)
+        }
+
+        grand_market += subtotal["market_value"]
+        grand_invest += subtotal["investment_value"]
+        grand_profit += subtotal["profit_sgd"]
+        grand_value_sgd += subtotal["value_sgd"]
+
+        groups.append({
+            "group_name": group_name,
+            "rows": grp.round(2).to_dict(orient="records"),
+            "subtotal": subtotal
+        })
+
+    return {
+        "groups": groups,
+        "grand_total": {
+            "market_value": round(grand_market, 2),
+            "investment_value": round(grand_invest, 2),
+            "profit_sgd": round(grand_profit, 2),
+            "value_sgd": round(grand_value_sgd, 2)
+        }
+    }
 
 @app.get("/portfolio")
 def portfolio():
@@ -242,7 +323,6 @@ def portfolio():
 
     df = build_df()
     total = df["value_sgd"].sum() if not df.empty else 0
-
     allocation = (df.groupby("sub_type")["value_sgd"].sum() / total * 100) if total > 0 else pd.Series(dtype=float)
     currency = (df.groupby("currency")["value_sgd"].sum() / total * 100) if total > 0 else pd.Series(dtype=float)
 
@@ -280,8 +360,9 @@ def portfolio():
         "top_holdings": df.sort_values("value_sgd", ascending=False).head(10)[["asset", "value_sgd"]].round(2).to_dict(orient="records") if not df.empty else [],
         "asset_class_breakdown": asset_class_breakdown,
         "holdings": df.round(2).to_dict(orient="records") if not df.empty else [],
+        "cash_groups": cash_group_payload(df),
         "fx_rates": FX,
-        "fx_source": "Real-time from external API (NO hardcoded rates)"
+        "fx_source": "Real-time from external API"
     }
     cache_set("portfolio", result)
     return result
@@ -296,6 +377,11 @@ def holdings(asset_class: str):
     df = build_df()
     if df.empty:
         return []
+
+    if asset_class == "Cash":
+        result = cash_group_payload(df)
+        cache_set(cache_key, result)
+        return result
 
     filtered = df[df["sub_type"] == asset_class].copy()
     total = df["value_sgd"].sum()
@@ -341,7 +427,6 @@ def analytics():
     country_map = {"USD": "US", "INR": "India", "SGD": "Singapore", "AUD": "Australia", "GBP": "UK", "EUR": "Europe"}
     df["country"] = df["currency"].map(country_map)
     country = df.groupby("country")["value_sgd"].sum() / total * 100
-
     weights = df["value_sgd"] / total
     largest = weights.max() * 100
     top5 = weights.nlargest(5).sum() * 100
