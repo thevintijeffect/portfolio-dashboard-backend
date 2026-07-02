@@ -136,7 +136,6 @@ def parse_cash_sheet():
 
     for row in raw:
         first = str(row[0]).strip() if len(row) > 0 and row[0] is not None else ""
-        second = str(row[1]).strip() if len(row) > 1 and row[1] is not None else ""
         third = str(row[2]).strip() if len(row) > 2 and row[2] is not None else ""
 
         if first in CASH_HEADERS:
@@ -277,6 +276,7 @@ def cash_group_payload(df):
     grand_invest = 0
     grand_profit = 0
     grand_value_sgd = 0
+    total_value = max(df["value_sgd"].sum(), 1)
 
     for group_name in CASH_HEADERS:
         grp = cash_df[cash_df["cash_group"] == group_name].copy()
@@ -285,7 +285,7 @@ def cash_group_payload(df):
 
         grp["unrealised_gain"] = grp["market_value"] - grp["investment_value"]
         grp["unrealised_gain_pct"] = grp["unrealised_gain"] / grp["investment_value"].replace(0, 1) * 100
-        grp["portfolio_pct"] = grp["value_sgd"] / max(df["value_sgd"].sum(), 1) * 100
+        grp["portfolio_pct"] = grp["value_sgd"] / total_value * 100
 
         subtotal = {
             "market_value": round(grp["market_value"].sum(), 2),
