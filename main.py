@@ -237,9 +237,9 @@ def parse_cash_sheet():
         elif current_group == "SG Account balances":
             market_value = safe_float(cells[1]) if len(cells) > 1 else 0.0
             investment_value = market_value
-        elif current_group == "Foreign Cash Accounts":
-            market_value = safe_float(cells[2]) if len(cells) > 2 else 0.0
-            investment_value = safe_float(cells[3]) if len(cells) > 3 and cells[3] else 0.0
+      elif current_group == "Foreign Cash Accounts":
+              market_value = safe_float(cells[1]) if len(cells) > 1 else 0.0
+            investment_value = market_value
 
         if market_value <= 0 and investment_value <= 0:
             continue
