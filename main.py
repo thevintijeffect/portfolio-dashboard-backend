@@ -237,9 +237,9 @@ def parse_cash_sheet():
         elif current_group == "SG Account balances":
             market_value = safe_float(cells[1]) if len(cells) > 1 else 0.0
             investment_value = market_value
-      elif current_group == "Foreign Cash Accounts":
-    market_value = safe_float(cells[1]) if len(cells) > 1 else 0.0
-    investment_value = market_value
+        elif current_group == "Foreign Cash Accounts":
+            market_value = safe_float(cells[1]) if len(cells) > 1 else 0.0
+            investment_value = market_value
 
         if market_value <= 0 and investment_value <= 0:
             continue
@@ -250,10 +250,10 @@ def parse_cash_sheet():
             "cash_group": current_group,
             "currency": "SGD",
             "qty": 1.0,
-            "current_price": float(market_value),
-            "investment_price": float(investment_value),
-            "market_value": float(market_value),
-            "investment_value": float(investment_value)
+            "current_price": market_value,
+            "investment_price": investment_value,
+            "market_value": market_value,
+            "investment_value": investment_value
         })
 
     return parsed
